@@ -25,7 +25,7 @@ A drop-in replacement for Home Assistant's built-in map card with a plugin-ready
 
 ### Manual
 
-1. Copy `www/openmap-card.js` to your HA `config/www/` directory
+1. Copy `openmap-card.js` to your HA `config/www/` directory
 2. Add to your Lovelace resources:
    ```yaml
    resources:
