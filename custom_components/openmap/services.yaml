@@ -1,0 +1,62 @@
+register_overlay:
+  name: Register overlay
+  description: Register a data overlay for the Open Map card.
+  fields:
+    name:
+      required: true
+      selector:
+        text:
+      description: Unique name for the overlay.
+      example: "Baustellen Baden-Wuerttemberg"
+    data_url:
+      required: true
+      selector:
+        text:
+      description: URL to fetch GeoJSON data from.
+      example: "https://api.mobidata-bw.de/datasets/traffic/roadworks/roadworks_geojson.json"
+    overlay_type:
+      required: true
+      selector:
+        select:
+          options:
+            - "geojson"
+            - "wms"
+            - "entity"
+      description: Type of overlay data source.
+      example: "geojson"
+    marker_type:
+      required: false
+      selector:
+        select:
+          options:
+            - "cone"
+            - "circle"
+            - "default"
+      description: Marker icon type to use for features.
+      example: "cone"
+    filter_bbox:
+      required: false
+      selector:
+        object:
+      description: "Bounding box filter as [min_lon, min_lat, max_lon, max_lat]."
+      example: "[7.5, 47.5, 10.5, 49.7]"
+    update_interval:
+      required: false
+      selector:
+        number:
+          min: 60
+          max: 86400
+          unit_of_measurement: seconds
+      description: Polling interval in seconds.
+      default: 1800
+
+unregister_overlay:
+  name: Unregister overlay
+  description: Remove a previously registered overlay.
+  fields:
+    name:
+      required: true
+      selector:
+        text:
+      description: Name of the overlay to remove.
+      example: "Baustellen Baden-Wuerttemberg"
