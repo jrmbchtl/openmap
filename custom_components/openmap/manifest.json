@@ -1,0 +1,11 @@
+{
+  "domain": "openmap",
+  "name": "Open Map",
+  "version": "1.0.0",
+  "integration_type": "hub",
+  "dependencies": [],
+  "codeowners": [],
+  "requirements": [],
+  "iot_class": "local_polling",
+  "documentation": "https://github.com/your-username/openmap"
+}

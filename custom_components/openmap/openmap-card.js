@@ -36,7 +36,8 @@ const OpenMapCard = (() => {
     const css = document.createElement("style");
     css.id = styleId;
     css.textContent = `
-      openmap-card { display:block; height:100%; min-height:400px; }
+      openmap-card { display:block; height:100%; }
+      .om-panel { width:100%; height:100vh; position:relative; }
       .om-wrap { width:100%; height:100%; min-height:400px; border-radius:var(--ha-card-border-radius,12px); overflow:hidden; position:relative; }
       .om-map { width:100%; height:100%; min-height:400px; }
       .om-pop { font-family:var(--primary-font-family,Roboto,sans-serif); color:var(--primary-text-color,#333); min-width:200px; max-width:320px; }
@@ -58,12 +59,14 @@ const OpenMapCard = (() => {
       this._map = null;
       this._markerGroup = null;
       this._L = null;
-      attachShadow ? this.attachShadow({ mode: "open" }) : (this._noShadow = true);
+      this._isPanel = false;
+      this._ready = false;
       injectStyles();
     }
 
     setConfig(config) {
       if (!config || typeof config !== "object") throw new Error("Invalid config");
+      this._isPanel = false;
       this._config = {
         title: "", entities: [], geolocation_sources: [], include_domains: [],
         default_zoom: 7, center: [48.8, 9.2], dark_mode: "auto",
@@ -73,17 +76,44 @@ const OpenMapCard = (() => {
       if (this._map) setTimeout(() => this._map.invalidateSize(), 100);
     }
 
+    set panel(val) {
+      this._isPanel = true;
+      this._config = {
+        title: "", entities: [], geolocation_sources: [], include_domains: [],
+        default_zoom: 7, center: [48.8, 9.2], dark_mode: "auto",
+        attribution: "", marker: {}, ...(val.config || {})
+      };
+      this._tryInit();
+    }
+
+    set narrow(val) {}
+    set route(val) {}
+
     set hass(hass) {
       this._hass = hass;
-      if (this._map) this._renderMarkers();
+      if (this._isPanel) {
+        this._tryInit();
+      } else if (this._map) {
+        this._renderMarkers();
+      }
     }
 
     get hass() { return this._hass; }
 
     getCardSize() { return 4; }
 
+    _tryInit() {
+      if (!this._isPanel || !this._hass || this._ready) return;
+      this._ready = true;
+      this._render();
+      loadLeaflet(L => {
+        this._L = L;
+        this._initMap();
+      });
+    }
+
     connectedCallback() {
-      if (this._noShadow) return;
+      if (this._isPanel) return;
       this._render();
       loadLeaflet(L => {
         this._L = L;
@@ -96,24 +126,22 @@ const OpenMapCard = (() => {
     }
 
     _render() {
-      const root = this._noShadow ? this : (this.shadowRoot || this.attachShadow({ mode: "open" }));
-      if (!root) return;
-      root.innerHTML = `
-        <ha-card>
-          ${this._config.title ? `<h1 class="card-header">${esc(this._config.title)}</h1>` : ""}
-          <div class="om-wrap">
-            <div class="om-map"></div>
-          </div>
-          <div class="om-att">${esc(this._config.attribution || "")}</div>
-        </ha-card>
-      `;
+      if (this._isPanel) {
+        this.innerHTML = '<div class="om-panel"><div class="om-map"></div></div>';
+      } else {
+        this.innerHTML = `
+          <ha-card>
+            ${this._config.title ? `<h1 class="card-header">${esc(this._config.title)}</h1>` : ""}
+            <div class="om-wrap"><div class="om-map"></div></div>
+            <div class="om-att">${esc(this._config.attribution || "")}</div>
+          </ha-card>
+        `;
+      }
     }
 
     _initMap() {
       if (!this._L) return;
-      const root = this._noShadow ? this : this.shadowRoot;
-      if (!root) return;
-      const container = root.querySelector(".om-map");
+      const container = this.querySelector(".om-map");
       if (!container) return;
       if (this._map) { this._map.remove(); this._map = null; }
 
@@ -169,9 +197,8 @@ const OpenMapCard = (() => {
       });
 
       (cfg.geolocation_sources || []).forEach(src => {
-        const prefix = "geo_location.";
         Object.values(st).forEach(s => {
-          if (s.entity_id.startsWith(prefix) && s.attributes.source === src && s.attributes.latitude) entities.push(s);
+          if (s.entity_id.startsWith("geo_location.") && s.attributes.source === src && s.attributes.latitude) entities.push(s);
         });
       });
 
@@ -193,12 +220,12 @@ const OpenMapCard = (() => {
         const svg = pinSVG(color);
         const icon = L.divIcon({ html: svg, className: "", iconSize: [24, 36], iconAnchor: [12, 36], popupAnchor: [0, -36] });
         const marker = L.marker([lat, lon], { icon }).addTo(this._markerGroup);
-        const content = this._buildPopup(e, mc.popup || {}, color);
+        const content = this._buildPopup(e, mc.popup || {});
         if (content) marker.bindPopup(content, { closeButton: true, className: "om-popup-container", maxWidth: 350 });
       });
     }
 
-    _buildPopup(state, pc, color) {
+    _buildPopup(state, pc) {
       const title = pc.title ? this._resolve(state, pc.title) : state.attributes.friendly_name || state.entity_id;
       const body = pc.body ? this._resolve(state, pc.body) : "";
       const fields = pc.fields || [

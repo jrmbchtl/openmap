@@ -1,42 +1,45 @@
-# Open Map Card
+# Open Map
 
-[![HACS Dashboard](https://img.shields.io/badge/HACS-Dashboard-41BDF5.svg)](https://hacs.xyz)
+[![HACS Integration](https://img.shields.io/badge/HACS-Integration-41BDF5.svg)](https://hacs.xyz)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A drop-in replacement for Home Assistant's built-in map card with a plugin-ready architecture for custom markers, popup templates, and data sources.
+A drop-in replacement for Home Assistant's built-in map card with a plugin-ready architecture. Registers a sidebar panel and works as a Lovelace card.
 
 ## Features
 
-- **Works like the built-in HA map** — same Leaflet rendering, same look and feel, same dark/light mode support
-- **Entity rendering** — display Home Assistant entities with `latitude`/`longitude` attributes using `entities`, `geolocation_sources`, and `include_domains` (same config format as the built-in card)
-- **Custom popups** — dark/light mode aware, with configurable fields
-- **Plugin-ready** — add new marker types, popup templates, or data sources via configuration
+- **Sidebar panel** — a full-screen "Open Map" entry in your sidebar
+- **Lovelace card** — works as `type: custom:openmap-card` on any dashboard
+- **Entity rendering** — display entities with `latitude`/`longitude` using `entities`, `geolocation_sources`, and `include_domains`
+- **Custom popups** — dark/light mode aware with configurable fields
+- **Dark/light mode** — auto-detects HA theme
+- **Plugin-ready** — extensible marker and popup configuration
 
 ## Installation
 
-### HACS (Recommended)
+### HACS
 
 1. Ensure [HACS](https://hacs.xyz) is installed
 2. Add this repository as a **custom repository** in HACS:
-   - Type: `Dashboard`
+   - Type: **Integration**
    - URL: `https://github.com/your-username/openmap`
 3. Click **Install**
-4. Add a **Open Map Card** card to any Lovelace dashboard
+4. **Restart Home Assistant**
+5. The "Open Map" panel appears in your sidebar
 
 ### Manual
 
-1. Copy `openmap-card.js` to your HA `config/www/` directory
-2. Add to your Lovelace resources:
-   ```yaml
-   resources:
-     - url: /local/openmap-card.js
-       type: module
-   ```
-3. Add the card via the Lovelace UI or YAML
+1. Copy `custom_components/openmap/` to your HA `config/custom_components/` directory
+2. **Restart Home Assistant**
 
-## Configuration
+## Usage
 
-### Basic Card
+### As a sidebar panel
+
+After installation, click **Open Map** in the sidebar — the map opens full-screen with all entities that have `latitude`/`longitude` attributes.
+
+### As a Lovelace card
+
+Add to any dashboard:
 
 ```yaml
 type: custom:openmap-card
@@ -52,7 +55,7 @@ entities:
     name: Temperature
 ```
 
-### With Entity Sources
+### With entity sources
 
 ```yaml
 type: custom:openmap-card
@@ -66,7 +69,7 @@ include_domains:
   - zone
 ```
 
-### Custom Popup
+### Custom popup
 
 ```yaml
 type: custom:openmap-card
@@ -102,7 +105,7 @@ marker:
 
 ## Marker Colors
 
-Available colors: `red`, `orange`, `green`, `blue`, `purple`
+`red`, `orange`, `green`, `blue`, `purple`
 
 ## License
 
