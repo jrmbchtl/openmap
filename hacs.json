@@ -1,0 +1,7 @@
+{
+  "name": "Open Map Card",
+  "content_in_root": false,
+  "filename": "openmap-card.js",
+  "render_readme": true,
+  "country": ["DE"]
+}
