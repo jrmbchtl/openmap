@@ -67,8 +67,19 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options flow for Open Map."""
 
     def __init__(self, config_entry):
-        """Initialize options flow."""
+        """Initialize options flow, compatible across HA versions.
+
+        The base OptionsFlow initializes internal flow state (flow id, handler,
+        source) in its constructor. Different HA versions accept a config_entry
+        argument or none, so call super() defensively. Skipping super() leaves
+        the flow state uninitialized and makes HA reject the flow with a 400.
+        """
+        try:
+            super().__init__(config_entry)
+        except TypeError:
+            super().__init__()
         self._config_entry = config_entry
+        self._handler = config_entry.domain
 
     @property
     def config_entry(self):

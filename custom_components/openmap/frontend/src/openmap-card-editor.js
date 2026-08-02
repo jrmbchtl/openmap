@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 
-const CARD_VERSION = "0.2.7";
+const CARD_VERSION = "0.2.8";
 
 const DOMAIN_OPTIONS = [
   "zone",

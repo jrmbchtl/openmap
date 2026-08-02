@@ -23,6 +23,63 @@ WEBCOMPONENT_NAME = "openmap-card"
 
 PLATFORMS = ["diagnostics"]
 
+# Defaults for the sidebar panel card. The options flow writes to
+# config_entry.options, which is merged over these defaults so the
+# "Configure" dialog actually controls the sidebar map.
+DEFAULT_PANEL_CONFIG = {
+    "title": "Open Map",
+    "default_zoom": 14,
+    "theme_mode": "auto",
+    "cluster": True,
+    "entities": [],
+    "geo_location_sources": [],
+    "include_domains": [],
+    "attribution": "",
+    "marker": {
+        "color": {"default": "default"},
+        "size": 48,
+        "label_mode": "initials",
+        "popup": {},
+    },
+}
+
+
+def _panel_config_from_entry(entry: ConfigEntry) -> dict:
+    """Build the sidebar panel card config from entry data/options."""
+    config = {**DEFAULT_PANEL_CONFIG}
+    config.update(entry.options or {})
+    # Honor values set during the initial setup for keys options didn't touch.
+    for key, value in (entry.data or {}).items():
+        if value is not None and value != "":
+            config.setdefault(key, value)
+    return config
+
+
+async def _register_panel(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """(Re)register the sidebar panel using the entry's options as card config."""
+    try:
+        # Remove any existing panel first so re-registration is safe.
+        try:
+            hass.components.frontend.async_remove_panel(PANEL_URL_PATH)
+        except (AttributeError, KeyError):
+            pass
+        await async_register_panel(
+            hass,
+            frontend_url_path=PANEL_URL_PATH,
+            webcomponent_name=WEBCOMPONENT_NAME,
+            sidebar_title="Open Map",
+            sidebar_icon="mdi:map",
+            module_url=JS_PATH,
+            require_admin=False,
+            config=_panel_config_from_entry(entry),
+            config_entry_id=entry.entry_id,
+        )
+        hass.data.setdefault(DOMAIN, {})["_panel_registered"] = True
+        _LOGGER.debug("Registered sidebar panel for entry %s", entry.entry_id)
+    except Exception as err:
+        _LOGGER.exception("Failed to register sidebar panel")
+        raise ConfigEntryNotReady("Failed to register sidebar panel") from err
+
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up Open Map integration (called at HA startup)."""
@@ -51,22 +108,6 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     # Register JS as an extra resource so Lovelace loads it automatically.
     add_extra_js_url(hass, JS_PATH)
 
-    # Register sidebar panel
-    try:
-        await async_register_panel(
-            hass,
-            frontend_url_path=PANEL_URL_PATH,
-            webcomponent_name=WEBCOMPONENT_NAME,
-            sidebar_title="Open Map",
-            sidebar_icon="mdi:map",
-            module_url=JS_PATH,
-            require_admin=False,
-        )
-        _LOGGER.debug("Registered sidebar panel")
-    except Exception as err:
-        _LOGGER.exception("Failed to register sidebar panel")
-        raise ConfigEntryNotReady("Failed to register sidebar panel") from err
-
     return True
 
 
@@ -77,6 +118,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entries[entry.entry_id] = entry
 
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+
+    await _register_panel(hass, entry)
 
     _LOGGER.info("Open Map setup complete for entry %s", entry.entry_id)
     return True

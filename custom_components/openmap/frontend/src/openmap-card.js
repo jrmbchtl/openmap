@@ -3,7 +3,7 @@ import L from "./leaflet-shim.js";
 import "leaflet.markercluster";
 import "./openmap-card-editor.js";
 
-const CARD_VERSION = "0.2.7";
+const CARD_VERSION = "0.2.8";
 
 // Debug logging: opt-in via ?debug=1, ?openmap_debug=1, or
 // localStorage["openmap_debug"] = "1".
@@ -709,7 +709,7 @@ class OpenmapCard extends LitElement {
       popupAnchor: [0, -markerSize / 2],
     });
     const marker = L.marker([Number(state.attributes.latitude), Number(state.attributes.longitude)], { icon });
-    const content = this._buildPopup(state, mc.popup || {});
+    const content = this._buildPopup(state, mc.popup || {}, markerColor);
     if (content) marker.bindPopup(content, { closeButton: true, className: "om-popup-container", maxWidth: 350 });
     return marker;
   }
@@ -806,22 +806,56 @@ class OpenmapCard extends LitElement {
     }
   }
 
-  _buildPopup(state, pc) {
-    const title = pc.title ? this._resolve(state, pc.title) : state.attributes.friendly_name || state.entity_id;
+  _buildPopup(state, pc, markerColor) {
+    const rawTitle = pc.title
+      ? this._resolveRaw(state, pc.title)
+      : state.attributes.friendly_name || state.entity_id;
+    const title = esc(rawTitle);
     const body = pc.body ? this._resolve(state, pc.body) : "";
-    const fields = pc.fields || [{ label: "State", value: "state" }];
+    const fields = pc.fields || [];
+    const icon = state.attributes?.icon
+      ? `<ha-icon icon="${esc(state.attributes.icon)}"></ha-icon>`
+      : "";
+    const avatarInner =
+      icon ||
+      esc(
+        String(rawTitle)
+          .split(" ")
+          .map((p) => p[0])
+          .join("")
+          .substring(0, 2)
+          .toUpperCase()
+      );
+    const stateLine = state.state ? esc(String(state.state)) : "";
     let h = '<div class="om-pop">';
-    h += `<h3>${esc(title)}</h3>`;
+    h += '<div class="om-pop-header">';
+    h += `<span class="om-pop-avatar" style="--marker-color:${esc(markerColor || "var(--accent-color, #03a9f4)")}">${avatarInner}</span>`;
+    h += '<div class="om-pop-heading">';
+    h += `<h3>${title}</h3>`;
+    if (stateLine) h += `<div class="om-pop-sub">${stateLine}</div>`;
+    h += "</div></div>";
     h += '<div class="om-rows">';
     fields.forEach(f => {
       let v = this._resolve(state, f.value || f.field || f);
-      if (f.format === "number") v = Math.round(parseFloat(v) * 100) / 100;
-      if (v != null && v !== "") h += `<div class="om-row"><span class="om-l">${esc(f.label || f.name || f)}</span><span class="om-v">${esc(String(v))}</span></div>`;
+      if (v == null || v === "") return;
+      if (f.format === "number") v = esc(String(Math.round(parseFloat(v) * 100) / 100));
+      h += `<div class="om-row"><span class="om-l">${esc(f.label || f.name || f)}</span><span class="om-v">${v}</span></div>`;
     });
     h += "</div>";
-    if (body) h += `<div class="om-desc">${esc(body)}</div>`;
+    if (body) h += `<div class="om-desc">${body}</div>`;
     h += "</div>";
     return h;
+  }
+
+  _resolveRaw(obj, expr) {
+    if (!expr || !obj) return "";
+    if (expr === "state") return String(obj.state);
+    if (typeof expr === "string" && expr.indexOf("{") >= 0)
+      return expr.replace(/\{(\w+)\}/g, (_, k) =>
+        obj.attributes && obj.attributes[k] !== undefined ? String(obj.attributes[k]) : `{${k}}`
+      );
+    if (obj.attributes && obj.attributes[expr] !== undefined) return String(obj.attributes[expr]);
+    return "";
   }
 
   _resolve(obj, expr) {
@@ -1098,35 +1132,58 @@ class OpenmapCard extends LitElement {
     }
     .om-pop {
       font-family: var(--primary-font-family, Roboto, sans-serif);
-      color: var(--primary-text-color, #333);
+      color: var(--primary-text-color, #212121);
       min-width: 200px;
-      max-width: 320px;
+      max-width: 300px;
     }
-    .om-pop h3 {
+    .om-pop-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+      padding-right: 24px;
+    }
+    .om-pop-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--marker-color, var(--accent-color, #03a9f4));
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      --mdc-icon-size: 22px;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+    }
+    .om-pop-heading { min-width: 0; }
+    .om-pop-heading h3 {
       font-size: 14px;
       font-weight: 500;
-      margin: 0 0 10px;
-      padding: 0 0 10px 12px;
-      position: relative;
-      border-bottom: 1px solid var(--divider-color, #eee);
+      margin: 0;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
     }
-    .om-pop h3::before {
-      content: "";
-      position: absolute;
-      left: 0;
-      top: 2px;
-      bottom: 10px;
-      width: 4px;
-      border-radius: 2px;
-      background: var(--accent-color, #03a9f4);
+    .om-pop-sub {
+      font-size: 12px;
+      color: var(--secondary-text-color, #888);
+      margin-top: 2px;
+      overflow-wrap: anywhere;
     }
-    .om-rows { display: flex; flex-direction: column; }
+    .om-rows {
+      display: flex;
+      flex-direction: column;
+      border-top: 1px solid var(--divider-color, #eee);
+    }
     .om-row {
       display: flex;
       justify-content: space-between;
       align-items: baseline;
       gap: 12px;
-      padding: 5px 0;
+      padding: 6px 0;
       font-size: 13px;
     }
     .om-row + .om-row { border-top: 1px solid var(--divider-color, #eee); }
@@ -1134,26 +1191,30 @@ class OpenmapCard extends LitElement {
     .om-v { text-align: right; font-weight: 500; overflow-wrap: anywhere; }
     .om-desc {
       margin-top: 10px;
-      font-size: 13px;
+      font-size: 12px;
       line-height: 1.4;
       padding: 8px 10px;
       background: var(--secondary-background-color, #f5f5f5);
       border: 1px solid var(--divider-color, #eee);
-      border-radius: 8px;
+      border-radius: 10px;
     }
-    /* Leaflet popup shell styled as a card (border, theme colors, dark-mode safe). */
+    /* Leaflet popup shell styled as an HA card. */
     #map .leaflet-popup-content-wrapper.om-popup-container,
     #map .leaflet-popup-tip {
-      background: var(--card-background-color, #fff);
+      background: var(--ha-card-background, var(--card-background-color, #fff));
       color: var(--primary-text-color, #212121);
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
     }
     #map .leaflet-popup-content-wrapper.om-popup-container {
       border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
-      border-radius: 12px;
+      border-radius: var(--ha-card-border-radius, 16px);
+      box-shadow: var(--ha-card-box-shadow, 0 2px 8px rgba(0, 0, 0, 0.2));
+      overflow: hidden;
+    }
+    #map .leaflet-popup-tip {
+      box-shadow: none;
     }
     #map .om-popup-container .leaflet-popup-content {
-      margin: 12px 16px;
+      margin: 14px 16px;
       line-height: 1.4;
     }
     #map .leaflet-popup-close-button {
@@ -1164,6 +1225,7 @@ class OpenmapCard extends LitElement {
       line-height: 26px;
       text-align: center;
       border-radius: 50%;
+      z-index: 1;
       transition: color 0.15s, background-color 0.15s;
     }
     #map .leaflet-popup-close-button:hover {
