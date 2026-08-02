@@ -3,7 +3,7 @@ import L from "./leaflet-shim.js";
 import "leaflet.markercluster";
 import "./openmap-card-editor.js";
 
-const CARD_VERSION = "0.2.3";
+const CARD_VERSION = "0.2.4";
 
 // Debug logging: opt-in via ?debug=1, ?openmap_debug=1, or
 // localStorage["openmap_debug"] = "1".
@@ -195,6 +195,7 @@ class OpenmapCard extends LitElement {
     this._isPreview = false;
     this._prevRelevantStates = {};
     this._renderMarkersDebounced = debounce(this._renderMarkers.bind(this), 150);
+    this._invalidateDebounced = debounce(() => this._invalidateSize(), 100);
     this._resizeObserver = null;
     this._visibilityObserver = null;
     this._debug = _isDebugFromUrl();
@@ -288,8 +289,8 @@ class OpenmapCard extends LitElement {
         this._resizeObserver = new ResizeObserver(() => {
           if (!this._map) {
             this._initMap();
-          } else if (this._map) {
-            this._map.invalidateSize();
+          } else {
+            this._invalidateDebounced();
           }
         });
         this._resizeObserver.observe(this.shadowRoot?.getElementById("map") || this);
@@ -339,10 +340,12 @@ class OpenmapCard extends LitElement {
         this._tryInit();
         return;
       }
-      // Live theme changes (light <-> dark) should re-apply the map style.
+      // Live theme changes (light <-> dark) should re-apply the map style
+      // and force a tile redraw so the map never collapses to a solid color.
       const oldTheme = changed.get("hass")?.themes?.darkMode;
       if (this.hass && oldTheme !== this.hass.themes?.darkMode && this._map) {
         this._updateMapStyle();
+        this._refreshTiles();
       }
     }
     if (changed.has("config")) {
@@ -388,9 +391,57 @@ class OpenmapCard extends LitElement {
   _updateMapStyle() {
     const map = this.shadowRoot?.getElementById("map");
     if (!map) return;
-    map.classList.toggle("dark", this._darkMode);
+    const dark = this._darkMode;
+    map.classList.toggle("dark", dark);
     map.classList.toggle("forced-dark", this.config?.theme_mode === "dark");
     map.classList.toggle("forced-light", this.config?.theme_mode === "light");
+    // Deterministically apply the dark tile filter for auto+dark too
+    // (matches HA's dark map appearance without relying on class state).
+    map.style.setProperty(
+      "--map-filter",
+      dark
+        ? "invert(0.9) hue-rotate(170deg) brightness(1.5) contrast(1.2) saturate(0.3)"
+        : "invert(0)"
+    );
+  }
+
+  _invalidateSize() {
+    if (!this._map) return;
+    let size;
+    try {
+      size = this._map.getSize();
+    } catch (e) {
+      return;
+    }
+    if (!size || size.x === 0 || size.y === 0) {
+      // Container not laid out yet; retry a few times (theme changes can
+      // briefly zero the size, which would otherwise make Leaflet drop all
+      // tiles). Cap retries so hidden tabs don't loop forever.
+      this._invalidateRetries = (this._invalidateRetries || 0) + 1;
+      if (this._invalidateRetries > 40) {
+        this._invalidateRetries = 0;
+        return;
+      }
+      setTimeout(() => this._invalidateSize(), 150);
+      return;
+    }
+    this._invalidateRetries = 0;
+    this._map.invalidateSize({ debounceMoveend: true });
+  }
+
+  _refreshTiles() {
+    if (!this._map) return;
+    setTimeout(() => {
+      if (!this._map) return;
+      try {
+        this._map.invalidateSize({ debounceMoveend: true });
+        if (this._tileLayer && typeof this._tileLayer.redraw === "function") {
+          this._tileLayer.redraw();
+        }
+      } catch (e) {
+        _dlog("tiles", "refresh failed", e);
+      }
+    }, 50);
   }
 
   _computePadding() {
@@ -454,7 +505,7 @@ class OpenmapCard extends LitElement {
 
     try {
       this._addTileLayer();
-      this._map.on("resize", () => this._map && this._map.invalidateSize());
+      this._map.on("resize", () => this._invalidateSize());
       this._updateMapStyle();
     } catch (e) {
       _dlog("init", "tile/layer setup failed", e);
@@ -462,13 +513,13 @@ class OpenmapCard extends LitElement {
 
     try {
       this._resizeObserver = new ResizeObserver(() => {
-        if (this._map) this._map.invalidateSize();
+        if (this._map) this._invalidateDebounced();
       });
       this._resizeObserver.observe(container);
 
       this._visibilityObserver = new IntersectionObserver((entries) => {
         if (entries[0]?.isIntersecting && this._map) {
-          this._map.invalidateSize();
+          this._invalidateSize();
         }
       });
       this._visibilityObserver.observe(container);
@@ -476,7 +527,7 @@ class OpenmapCard extends LitElement {
       _dlog("init", "observer setup failed", e);
     }
 
-    setTimeout(() => this._map && this._map.invalidateSize(), 200);
+    setTimeout(() => this._invalidateSize(), 200);
     this._renderMarkers();
   }
 

@@ -4,7 +4,8 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.selector import (
-    EntityFilterSelectorConfig,
+    BooleanSelector,
+    BooleanSelectorConfig,
     EntitySelector,
     EntitySelectorConfig,
     NumberSelector,
@@ -18,6 +19,20 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import DOMAIN
+
+DOMAIN_OPTIONS = ["zone", "device_tracker", "person", "sensor", "geo_location"]
+COLOR_OPTIONS = ["red", "orange", "green", "blue", "purple"]
+
+
+def _normalize_list(value):
+    """Accept a comma-separated string or a list and return a clean list."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, list):
+        return [item for item in value if item]
+    return []
 
 
 class OpenMapConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -62,13 +77,13 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_init(self, user_input=None):
         """Manage the options."""
         if user_input is not None:
-            # Clean up empty center coordinates - omit keys if empty
             cleaned_input = {}
             for k, v in user_input.items():
-                if v == "":
+                if v is None or v == "":
                     continue
-                # Map marker_color_default to marker.color.default
-                if k == "marker_color_default":
+                if k in ("geolocation_sources", "include_domains"):
+                    cleaned_input[k] = _normalize_list(v)
+                elif k == "marker_color_default":
                     if "marker" not in cleaned_input:
                         cleaned_input["marker"] = {}
                     if "color" not in cleaned_input["marker"]:
@@ -78,18 +93,8 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
                     cleaned_input[k] = v
             return self.async_create_entry(title="", data=cleaned_input)
 
-        # Merge options with data for backward compatibility fallback
+        # Merge options with data for backward compatibility fallback.
         options = {**self.config_entry.data, **self.config_entry.options}
-
-        # Get geo sources for the selector
-        geo_sources = []
-        if self.hass:
-            sources = set()
-            for state in self.hass.states.async_all():
-                attrs = getattr(state, "attributes", {}) or {}
-                if state.entity_id.startswith("geo_location.") and attrs.get("source"):
-                    sources.add(attrs["source"])
-            geo_sources = sorted(sources)
 
         data_schema = vol.Schema(
             {
@@ -99,15 +104,29 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
                 ): TextSelector(TextSelectorConfig()),
                 vol.Optional(
                     "default_zoom",
-                    default=options.get("default_zoom", 7),
+                    default=options.get("default_zoom", 14),
                 ): NumberSelector(
                     NumberSelectorConfig(
                         min=1,
-                        max=19,
+                        max=20,
                         step=1,
                         mode=NumberSelectorMode.BOX,
                     )
                 ),
+                vol.Optional(
+                    "theme_mode",
+                    default=options.get("theme_mode")
+                    or options.get("dark_mode", "auto"),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=["auto", "light", "dark"],
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(
+                    "cluster",
+                    default=options.get("cluster", True),
+                ): BooleanSelector(BooleanSelectorConfig()),
                 vol.Optional(
                     "center_lat",
                 ): NumberSelector(
@@ -129,15 +148,6 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
                     )
                 ),
                 vol.Optional(
-                    "dark_mode",
-                    default=options.get("dark_mode", "auto"),
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=["auto", "light", "dark"],
-                        mode=SelectSelectorMode.DROPDOWN,
-                    )
-                ),
-                vol.Optional(
                     "attribution",
                     default=options.get("attribution", ""),
                 ): TextSelector(TextSelectorConfig()),
@@ -146,26 +156,24 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
                     default=options.get("entities", []),
                 ): EntitySelector(
                     EntitySelectorConfig(
-                        filter=EntityFilterSelectorConfig(),
                         multiple=True,
                     )
                 ),
                 vol.Optional(
                     "geolocation_sources",
-                    default=options.get("geolocation_sources", []),
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=geo_sources,
-                        multiple=True,
-                        mode=SelectSelectorMode.DROPDOWN,
-                    )
-                ),
+                    default=", ".join(
+                        _normalize_list(
+                            options.get("geolocation_sources")
+                            or options.get("geo_location_sources", [])
+                        )
+                    ),
+                ): TextSelector(TextSelectorConfig()),
                 vol.Optional(
                     "include_domains",
-                    default=options.get("include_domains", []),
+                    default=_normalize_list(options.get("include_domains", [])),
                 ): SelectSelector(
                     SelectSelectorConfig(
-                        options=["zone", "device_tracker", "person", "sensor", "geo_location"],
+                        options=DOMAIN_OPTIONS,
                         multiple=True,
                         mode=SelectSelectorMode.DROPDOWN,
                     )
@@ -173,10 +181,10 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Optional(
                     "marker_color_default",
                     default=options.get("marker_color_default")
-                    or options.get("marker", {}).get("color", {}).get("default", "red"),
+                    or options.get("marker", {}).get("color", {}).get("default", "default"),
                 ): SelectSelector(
                     SelectSelectorConfig(
-                        options=["red", "orange", "green", "blue", "purple"],
+                        options=COLOR_OPTIONS,
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),

@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 
-const CARD_VERSION = "0.2.3";
+const CARD_VERSION = "0.2.4";
 
 class OpenmapCardEditor extends LitElement {
   static properties = {
