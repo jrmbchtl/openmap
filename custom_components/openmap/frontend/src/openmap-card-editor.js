@@ -1,6 +1,17 @@
 import { LitElement, html, css, nothing } from "lit";
 
-const CARD_VERSION = "0.2.6";
+const CARD_VERSION = "0.2.7";
+
+const DOMAIN_OPTIONS = [
+  "zone",
+  "device_tracker",
+  "person",
+  "sensor",
+  "geo_location",
+  "camera",
+];
+
+const LABEL_MODE_OPTIONS = ["initials", "name", "state", "icon"];
 
 class OpenmapCardEditor extends LitElement {
   static properties = {
@@ -27,15 +38,6 @@ class OpenmapCardEditor extends LitElement {
     .section { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--divider-color, #e0e0e0); }
     .section-title { font-size: 13px; font-weight: 600; margin: 0 0 4px 0; }
     .section-hint { font-size: 11px; opacity: 0.7; margin: 0 0 10px 0; line-height: 1.4; }
-    .field-row { display: flex; gap: 12px; margin-bottom: 8px; }
-    .field-row > * { flex: 1; }
-    .color-options { display: flex; gap: 8px; flex-wrap: wrap; }
-    .color-option {
-      width: 32px; height: 32px; border-radius: 50%;
-      border: 2px solid transparent; cursor: pointer; transition: transform 0.15s;
-    }
-    .color-option.selected { transform: scale(1.15); border-color: var(--primary-color); }
-    .color-option:hover { transform: scale(1.1); }
   `;
 
   _emit() {
@@ -57,37 +59,42 @@ class OpenmapCardEditor extends LitElement {
     this._emit();
   }
 
-  _colorChanged(color) {
-    this.config = {
-      ...this.config,
-      marker: { ...this.config.marker, color: { ...this.config.marker?.color, default: color } },
-    };
-    this._emit();
-  }
-
-  _setIncludeDomains(e) {
-    const raw = e.target.value;
-    const value = raw.split(",").map(s => s.trim()).filter(Boolean);
-    this.config = { ...this.config, include_domains: value };
-    this._emit();
-  }
-
-  _setMarkerValue(e) {
-    const key = e.target.name;
-    let value = e.target.value;
-    if (key === "size") value = Number(value) || 48;
-    this.config = {
-      ...this.config,
-      marker: { ...this.config.marker, [key]: value },
-    };
+  _handleMarkerForm(e) {
+    const v = e.detail?.value;
+    if (!v) return;
+    const marker = { ...this.config.marker };
+    if (v.marker_size !== undefined) marker.size = Number(v.marker_size) || 48;
+    if (v.marker_label_mode !== undefined) marker.label_mode = v.marker_label_mode;
+    marker.color = { ...(marker.color || {}) };
+    if (v.marker_color_custom !== undefined) {
+      if (v.marker_color_custom) {
+        const existing = marker.color.default;
+        marker.color.default = existing && existing !== "default" ? existing : "#F44336";
+      } else {
+        marker.color.default = "default";
+      }
+    }
+    if (v.marker_color !== undefined && v.marker_color_custom) {
+      marker.color.default = v.marker_color;
+    }
+    this.config = { ...this.config, marker };
     this._emit();
   }
 
   render() {
     if (!this.hass) return nothing;
     const cfg = this.config;
-    const colors = ["red", "orange", "green", "blue", "purple"];
     const themeMode = cfg.theme_mode || cfg.dark_mode || "auto";
+    const markerColorDefault = cfg.marker?.color?.default;
+    const markerColorCustom = markerColorDefault !== undefined && markerColorDefault !== "default";
+    const markerSchema = [
+      { name: "marker_size", label: "Marker Size (px)", selector: { number: { mode: "box", min: 24, max: 96, step: 2 } } },
+      { name: "marker_label_mode", label: "Marker Label", selector: { select: { options: LABEL_MODE_OPTIONS } } },
+      { name: "marker_color_custom", label: "Custom Marker Color", selector: { boolean: {} } },
+    ];
+    if (markerColorCustom) {
+      markerSchema.push({ name: "marker_color", label: "Marker Color", selector: { color: {} } });
+    }
 
     return html`
       <ha-form
@@ -95,21 +102,25 @@ class OpenmapCardEditor extends LitElement {
         .data=${{
           title: cfg.title || "",
           default_zoom: cfg.default_zoom || 14,
-          center_lat: cfg.center_lat !== undefined ? cfg.center_lat : "",
-          center_lon: cfg.center_lon !== undefined ? cfg.center_lon : "",
+          center_lat: cfg.center_lat !== undefined ? cfg.center_lat : this.hass.config?.latitude ?? "",
+          center_lon: cfg.center_lon !== undefined ? cfg.center_lon : this.hass.config?.longitude ?? "",
           theme_mode: themeMode,
           cluster: cfg.cluster !== false,
-          aspect_ratio: cfg.aspect_ratio || "",
+          include_domains: cfg.include_domains || [],
           attribution: cfg.attribution || "",
         }}
         .schema=${[
           { name: "title", label: "Title", selector: { text: {} } },
-          { name: "default_zoom", label: "Default Zoom", selector: { number: { min: 1, max: 20, step: 1 } } },
-          { name: "center_lat", label: "Map Center Latitude", selector: { number: { min: -90, max: 90, step: 0.000001 } } },
-          { name: "center_lon", label: "Map Center Longitude", selector: { number: { min: -180, max: 180, step: 0.000001 } } },
+          { name: "default_zoom", label: "Default Zoom", selector: { number: { mode: "box", min: 1, max: 20, step: 1 } } },
+          { name: "center_lat", label: "Map Center Latitude", selector: { number: { mode: "box", min: -90, max: 90, step: 0.000001 } } },
+          { name: "center_lon", label: "Map Center Longitude", selector: { number: { mode: "box", min: -180, max: 180, step: 0.000001 } } },
           { name: "theme_mode", label: "Theme Mode", selector: { select: { options: ["auto", "light", "dark"] } } },
           { name: "cluster", label: "Cluster Markers", selector: { boolean: {} } },
-          { name: "aspect_ratio", label: "Aspect Ratio (e.g. 1:1)", selector: { text: {} } },
+          {
+            name: "include_domains",
+            label: "Include Domains",
+            selector: { select: { multiple: true, custom_value: true, options: DOMAIN_OPTIONS } },
+          },
           { name: "attribution", label: "Custom Attribution", selector: { text: {} } },
         ]}
         .computeLabel=${(s) => s.label}
@@ -152,54 +163,22 @@ class OpenmapCardEditor extends LitElement {
       </div>
 
       <div class="section">
-        <p class="section-title">Include Domains</p>
-        <p class="section-hint">
-          Comma-separated domains whose entities with lat/lon should appear (e.g. zone,device_tracker).
-        </p>
-        <input
-          type="text"
-          .value=${(cfg.include_domains || []).join(",")}
-          @input=${this._setIncludeDomains}
-          placeholder="zone,device_tracker,person"
-        />
-      </div>
-
-      <div class="section">
         <p class="section-title">Marker Appearance</p>
-        <div class="field-row">
-          <input
-            type="number"
-            name="size"
-            min="24"
-            max="96"
-            step="2"
-            .value=${cfg.marker?.size || 48}
-            @input=${this._setMarkerValue}
-            title="Marker size (px)"
-            placeholder="Marker size (px)"
-          />
-          <select
-            name="label_mode"
-            @change=${this._setMarkerValue}
-            title="Marker label mode"
-          >
-            <option value="initials" ${(cfg.marker?.label_mode || "initials") === "initials" ? "selected" : ""}>Initials</option>
-            <option value="name" ${cfg.marker?.label_mode === "name" ? "selected" : ""}>Name</option>
-            <option value="state" ${cfg.marker?.label_mode === "state" ? "selected" : ""}>State</option>
-            <option value="icon" ${cfg.marker?.label_mode === "icon" ? "selected" : ""}>Icon</option>
-          </select>
-        </div>
-        <p class="section-hint">Default marker color:</p>
-        <div class="color-options">
-          ${colors.map(color => html`
-            <div
-              class="color-option ${(cfg.marker?.color?.default || "default") === color ? "selected" : ""}"
-              style="background:${color}"
-              @click=${() => this._colorChanged(color)}
-              title=${color}
-            ></div>
-          `)}
-        </div>
+        <p class="section-hint">
+          Size, label, and color of the circular markers. Disable the custom color to follow the theme accent.
+        </p>
+        <ha-form
+          .hass=${this.hass}
+          .data=${{
+            marker_size: cfg.marker?.size || 48,
+            marker_label_mode: cfg.marker?.label_mode || "initials",
+            marker_color_custom: markerColorCustom,
+            marker_color: markerColorCustom ? markerColorDefault : "#F44336",
+          }}
+          .schema=${markerSchema}
+          .computeLabel=${(s) => s.label}
+          @value-changed=${this._handleMarkerForm}
+        ></ha-form>
       </div>
 
       <div class="section">

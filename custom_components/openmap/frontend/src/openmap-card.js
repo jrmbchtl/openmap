@@ -3,7 +3,7 @@ import L from "./leaflet-shim.js";
 import "leaflet.markercluster";
 import "./openmap-card-editor.js";
 
-const CARD_VERSION = "0.2.6";
+const CARD_VERSION = "0.2.7";
 
 // Debug logging: opt-in via ?debug=1, ?openmap_debug=1, or
 // localStorage["openmap_debug"] = "1".
@@ -134,13 +134,6 @@ const statesEqual = (prevStates, currStates, entityIds) => {
 const isValidCoordinate = (lat, lon) =>
   Number.isFinite(lat) && Number.isFinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
 
-const parseAspectRatio = (ar) => {
-  if (typeof ar !== "string") return null;
-  const parts = ar.split(":").map(Number);
-  if (parts.length !== 2 || parts.some(isNaN) || parts.some((p) => p <= 0)) return null;
-  return { w: parts[0], h: parts[1] };
-};
-
 const colorToHex = (color) => NAMED_COLORS[color] || color || "#F44336";
 
 const resolveMarkerColor = (configMarker, entityColor) => {
@@ -188,6 +181,8 @@ class OpenmapCard extends LitElement {
     this.layout = "";
     this._map = null;
     this._markerLayer = null;
+    this._circleLayer = null;
+    this._pendingRender = false;
     this._tileLayer = null;
     this._isPanel = false;
     this._ready = false;
@@ -265,13 +260,7 @@ class OpenmapCard extends LitElement {
   set route(val) {}
 
   getCardSize() {
-    if (!this.config?.aspect_ratio) return 7;
-    const ratio = parseAspectRatio(this.config.aspect_ratio);
-    const ar =
-      ratio && ratio.w > 0 && ratio.h > 0
-        ? `${((100 * ratio.h) / ratio.w).toFixed(2)}`
-        : "100";
-    return 1 + Math.floor(Number(ar) / 25) || 3;
+    return 7;
   }
 
   getGridOptions() {
@@ -353,6 +342,8 @@ class OpenmapCard extends LitElement {
       this._visibilityObserver = null;
     }
     this._markerLayer = null;
+    this._circleLayer = null;
+    this._pendingRender = false;
     this._mapNode = null;
     this._ready = false;
   }
@@ -386,6 +377,7 @@ class OpenmapCard extends LitElement {
           this._map.remove();
           this._map = null;
           this._markerLayer = null;
+          this._circleLayer = null;
           this._tileLayer = null;
         }
         this._initMap();
@@ -525,19 +517,11 @@ class OpenmapCard extends LitElement {
 
   _computePadding() {
     const root = this.shadowRoot?.getElementById("root");
-    const ignoreAspectRatio =
+    const ignore =
       this.layout === "panel" || this.layout === "grid" || this._isPanel;
-    if (!this.config || ignoreAspectRatio || !root) return;
-    if (!this.config.aspect_ratio) {
-      root.style.paddingBottom = "100%";
-      return;
-    }
+    if (!this.config || ignore || !root) return;
     root.style.height = "auto";
-    const ratio = parseAspectRatio(this.config.aspect_ratio);
-    root.style.paddingBottom =
-      ratio && ratio.w > 0 && ratio.h > 0
-        ? `${((100 * ratio.h) / ratio.w).toFixed(2)}%`
-        : (root.style.paddingBottom = "100%");
+    root.style.paddingBottom = "100%";
   }
 
   _initMap() {
@@ -587,6 +571,12 @@ class OpenmapCard extends LitElement {
     try {
       this._addTileLayer();
       this._map.on("resize", () => this._invalidateSize());
+      this._map.on("moveend", () => {
+        if (this._pendingRender) {
+          this._pendingRender = false;
+          this._renderMarkers();
+        }
+      });
       this._updateMapStyle();
     } catch (e) {
       _dlog("init", "tile/layer setup failed", e);
@@ -736,10 +726,20 @@ class OpenmapCard extends LitElement {
 
   _renderMarkers() {
     if (!this._map || !this.hass) return;
+    // Don't rebuild mid-pan/zoom; the moveend handler will flush the pending render.
+    if (this._map._animatingZoom || this._map._moving) {
+      this._pendingRender = true;
+      return;
+    }
+    this._pendingRender = false;
 
     if (this._markerLayer) {
       this._map.removeLayer(this._markerLayer);
       this._markerLayer = null;
+    }
+    if (this._circleLayer) {
+      this._map.removeLayer(this._circleLayer);
+      this._circleLayer = null;
     }
 
     const cfg = this.config;
@@ -751,6 +751,7 @@ class OpenmapCard extends LitElement {
     const seen = new Set();
     const markers = [];
     const zones = [];
+    const rings = [];
 
     entities.forEach(({ state, color, name }) => {
       if (seen.has(state.entity_id)) return;
@@ -764,9 +765,10 @@ class OpenmapCard extends LitElement {
         return;
       }
       markers.push(this._buildMarker(state, name, markerColor, mc));
-      // gps accuracy ring (matches HA)
+      // gps accuracy ring (matches HA); kept out of the cluster so it never
+      // "jumps" while the cluster forms and dissolves during pan/zoom.
       if (state.attributes.gps_accuracy) {
-        markers.push(
+        rings.push(
           L.circle([lat, lon], {
             interactive: false,
             color: darkPrimary,
@@ -797,7 +799,11 @@ class OpenmapCard extends LitElement {
       this._markerLayer = L.layerGroup(markers);
     }
     this._map.addLayer(this._markerLayer);
-    zones.forEach((z) => z.addTo(this._map));
+    const circleLayers = [...zones, ...rings];
+    if (circleLayers.length) {
+      this._circleLayer = L.layerGroup(circleLayers);
+      this._circleLayer.addTo(this._map);
+    }
   }
 
   _buildPopup(state, pc) {
@@ -806,11 +812,13 @@ class OpenmapCard extends LitElement {
     const fields = pc.fields || [{ label: "State", value: "state" }];
     let h = '<div class="om-pop">';
     h += `<h3>${esc(title)}</h3>`;
+    h += '<div class="om-rows">';
     fields.forEach(f => {
       let v = this._resolve(state, f.value || f.field || f);
       if (f.format === "number") v = Math.round(parseFloat(v) * 100) / 100;
       if (v != null && v !== "") h += `<div class="om-row"><span class="om-l">${esc(f.label || f.name || f)}</span><span class="om-v">${esc(String(v))}</span></div>`;
     });
+    h += "</div>";
     if (body) h += `<div class="om-desc">${esc(body)}</div>`;
     h += "</div>";
     return h;
@@ -1094,24 +1102,73 @@ class OpenmapCard extends LitElement {
       min-width: 200px;
       max-width: 320px;
     }
-    .om-pop h3 { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
+    .om-pop h3 {
+      font-size: 14px;
+      font-weight: 500;
+      margin: 0 0 10px;
+      padding: 0 0 10px 12px;
+      position: relative;
+      border-bottom: 1px solid var(--divider-color, #eee);
+    }
+    .om-pop h3::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 2px;
+      bottom: 10px;
+      width: 4px;
+      border-radius: 2px;
+      background: var(--accent-color, #03a9f4);
+    }
+    .om-rows { display: flex; flex-direction: column; }
     .om-row {
       display: flex;
       justify-content: space-between;
-      padding: 3px 0;
+      align-items: baseline;
+      gap: 12px;
+      padding: 5px 0;
       font-size: 13px;
-      border-bottom: 1px solid var(--divider-color, #eee);
     }
-    .om-row:last-child { border-bottom: none; }
-    .om-l { color: var(--secondary-text-color, #888); margin-right: 8px; }
-    .om-v { text-align: right; font-weight: 500; }
+    .om-row + .om-row { border-top: 1px solid var(--divider-color, #eee); }
+    .om-l { color: var(--secondary-text-color, #888); flex-shrink: 0; }
+    .om-v { text-align: right; font-weight: 500; overflow-wrap: anywhere; }
     .om-desc {
-      margin-top: 8px;
+      margin-top: 10px;
       font-size: 13px;
       line-height: 1.4;
-      padding: 8px;
+      padding: 8px 10px;
       background: var(--secondary-background-color, #f5f5f5);
-      border-radius: 6px;
+      border: 1px solid var(--divider-color, #eee);
+      border-radius: 8px;
+    }
+    /* Leaflet popup shell styled as a card (border, theme colors, dark-mode safe). */
+    #map .leaflet-popup-content-wrapper.om-popup-container,
+    #map .leaflet-popup-tip {
+      background: var(--card-background-color, #fff);
+      color: var(--primary-text-color, #212121);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+    }
+    #map .leaflet-popup-content-wrapper.om-popup-container {
+      border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
+      border-radius: 12px;
+    }
+    #map .om-popup-container .leaflet-popup-content {
+      margin: 12px 16px;
+      line-height: 1.4;
+    }
+    #map .leaflet-popup-close-button {
+      color: var(--secondary-text-color, #888);
+      font-size: 18px;
+      width: 26px;
+      height: 26px;
+      line-height: 26px;
+      text-align: center;
+      border-radius: 50%;
+      transition: color 0.15s, background-color 0.15s;
+    }
+    #map .leaflet-popup-close-button:hover {
+      color: var(--primary-text-color, #212121);
+      background: var(--divider-color, rgba(0, 0, 0, 0.08));
     }
     .om-loading {
       padding: 16px;
