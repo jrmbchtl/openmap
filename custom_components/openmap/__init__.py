@@ -10,12 +10,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .const import DOMAIN
+from .const import DOMAIN, VERSION
 
 _LOGGER = logging.getLogger(__name__)
 
 # The built bundle includes both the card and its visual editor.
-JS_PATH = "/api/openmap/openmap-card.js"
+# Use a versioned URL so every release serves a fresh path and can never
+# be served from a stale browser/service-worker cache.
+JS_PATH = f"/api/openmap/v{VERSION}/openmap-card.js"
 PANEL_URL_PATH = "openmap"
 WEBCOMPONENT_NAME = "openmap-card"
 
@@ -37,8 +39,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         return False
 
     try:
+        # Versioned URL is immutable per release, so long-lived caching is safe.
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(JS_PATH, local_card_path, cache_headers=False)]
+            [StaticPathConfig(JS_PATH, local_card_path, cache_headers=True)]
         )
         _LOGGER.debug("Registered static path for %s", JS_PATH)
     except Exception as err:
