@@ -4,5 +4,5 @@
   "content_in_root": false,
   "filename": "custom_components/openmap/openmap-card.js",
   "version": "0.2.1",
-  "homeassistant": ">=2024.1.0"
+  "homeassistant": "2024.1.0"
 }
