@@ -1,4 +1,4 @@
 """Constants for Open Map integration."""
 
 DOMAIN = "openmap"
-VERSION = "0.2.8"
+VERSION = "0.2.9"

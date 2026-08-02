@@ -3,7 +3,7 @@ import L from "./leaflet-shim.js";
 import "leaflet.markercluster";
 import "./openmap-card-editor.js";
 
-const CARD_VERSION = "0.2.8";
+const CARD_VERSION = "0.2.9";
 
 // Debug logging: opt-in via ?debug=1, ?openmap_debug=1, or
 // localStorage["openmap_debug"] = "1".
@@ -709,7 +709,7 @@ class OpenmapCard extends LitElement {
       popupAnchor: [0, -markerSize / 2],
     });
     const marker = L.marker([Number(state.attributes.latitude), Number(state.attributes.longitude)], { icon });
-    const content = this._buildPopup(state, mc.popup || {}, markerColor);
+    const content = this._buildPopup(state, mc.popup || {}, color);
     if (content) marker.bindPopup(content, { closeButton: true, className: "om-popup-container", maxWidth: 350 });
     return marker;
   }

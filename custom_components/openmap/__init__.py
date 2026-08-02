@@ -60,8 +60,9 @@ async def _register_panel(hass: HomeAssistant, entry: ConfigEntry) -> None:
     try:
         # Remove any existing panel first so re-registration is safe.
         try:
-            hass.components.frontend.async_remove_panel(PANEL_URL_PATH)
-        except (AttributeError, KeyError):
+            if hass.components.frontend.get_panel(PANEL_URL_PATH) is not None:
+                hass.components.frontend.async_remove_panel(PANEL_URL_PATH)
+        except (AttributeError, KeyError, ValueError):
             pass
         await async_register_panel(
             hass,
@@ -72,7 +73,6 @@ async def _register_panel(hass: HomeAssistant, entry: ConfigEntry) -> None:
             module_url=JS_PATH,
             require_admin=False,
             config=_panel_config_from_entry(entry),
-            config_entry_id=entry.entry_id,
         )
         hass.data.setdefault(DOMAIN, {})["_panel_registered"] = True
         _LOGGER.debug("Registered sidebar panel for entry %s", entry.entry_id)

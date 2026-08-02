@@ -1,7 +1,7 @@
 {
   "domain": "openmap",
   "name": "Open Map",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "integration_type": "hub",
   "config_flow": true,
   "dependencies": ["frontend", "http"],

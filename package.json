@@ -1,6 +1,6 @@
 {
   "name": "openmap-card",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "Open Map Home Assistant integration frontend card",
   "private": true,
   "type": "module",
