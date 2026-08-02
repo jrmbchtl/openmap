@@ -1,6 +1,7 @@
 """The Open Map integration."""
 
 import logging
+import os
 
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
@@ -13,8 +14,8 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+# The built bundle includes both the card and its visual editor.
 JS_PATH = "/api/openmap/openmap-card.js"
-EDITOR_JS_PATH = "/api/openmap/openmap-card-editor.js"
 PANEL_URL_PATH = "openmap"
 WEBCOMPONENT_NAME = "openmap-card"
 
@@ -23,23 +24,29 @@ PLATFORMS = ["diagnostics"]
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up Open Map integration (called at HA startup)."""
-    # Register static paths so the card JS is served at /api/openmap/...
-    local_card_path = hass.config.path("custom_components/openmap/openmap-card.js")
-    local_editor_path = hass.config.path("custom_components/openmap/openmap-card-editor.js")
+    local_card_path = hass.config.path(
+        "custom_components/openmap/frontend/dist/openmap-card.js"
+    )
+
+    if not os.path.exists(local_card_path):
+        _LOGGER.error(
+            "Built card file not found at %s. Run 'npm run build' in the "
+            "integration directory.",
+            local_card_path,
+        )
+        return False
 
     try:
-        await hass.http.async_register_static_paths([
-            StaticPathConfig(JS_PATH, local_card_path, cache_headers=True),
-            StaticPathConfig(EDITOR_JS_PATH, local_editor_path, cache_headers=True),
-        ])
-        _LOGGER.debug("Registered static paths for %s and %s", JS_PATH, EDITOR_JS_PATH)
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig(JS_PATH, local_card_path, cache_headers=True)]
+        )
+        _LOGGER.debug("Registered static path for %s", JS_PATH)
     except Exception as err:
-        _LOGGER.exception("Failed to register static paths")
-        raise ConfigEntryNotReady("Failed to register static paths") from err
+        _LOGGER.exception("Failed to register static path")
+        raise ConfigEntryNotReady("Failed to register static path") from err
 
-    # Register JS as extra resources so Lovelace loads them automatically
+    # Register JS as an extra resource so Lovelace loads it automatically.
     add_extra_js_url(hass, JS_PATH)
-    add_extra_js_url(hass, EDITOR_JS_PATH)
 
     # Register sidebar panel
     try:

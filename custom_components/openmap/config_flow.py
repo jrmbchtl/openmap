@@ -63,11 +63,33 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
         """Manage the options."""
         if user_input is not None:
             # Clean up empty center coordinates - omit keys if empty
-            cleaned_input = {k: v for k, v in user_input.items() if v != ""}
+            cleaned_input = {}
+            for k, v in user_input.items():
+                if v == "":
+                    continue
+                # Map marker_color_default to marker.color.default
+                if k == "marker_color_default":
+                    if "marker" not in cleaned_input:
+                        cleaned_input["marker"] = {}
+                    if "color" not in cleaned_input["marker"]:
+                        cleaned_input["marker"]["color"] = {}
+                    cleaned_input["marker"]["color"]["default"] = v
+                else:
+                    cleaned_input[k] = v
             return self.async_create_entry(title="", data=cleaned_input)
 
         # Merge options with data for backward compatibility fallback
         options = {**self.config_entry.data, **self.config_entry.options}
+
+        # Get geo sources for the selector
+        geo_sources = []
+        if self.hass:
+            sources = set()
+            for state in self.hass.states.values():
+                attrs = getattr(state, "attributes", {}) or {}
+                if state.entity_id.startswith("geo_location.") and attrs.get("source"):
+                    sources.add(attrs["source"])
+            geo_sources = sorted(sources)
 
         data_schema = vol.Schema(
             {
@@ -131,24 +153,27 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Optional(
                     "geolocation_sources",
                     default=options.get("geolocation_sources", []),
-                ): TextSelector(
-                    TextSelectorConfig(
-                        multiline=True,
-                        type="text",
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=geo_sources,
+                        multiple=True,
+                        mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
                 vol.Optional(
                     "include_domains",
                     default=options.get("include_domains", []),
-                ): TextSelector(
-                    TextSelectorConfig(
-                        multiline=True,
-                        type="text",
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=["zone", "device_tracker", "person", "sensor", "geo_location"],
+                        multiple=True,
+                        mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
                 vol.Optional(
                     "marker_color_default",
-                    default=options.get("marker_color_default", "red"),
+                    default=options.get("marker_color_default")
+                    or options.get("marker", {}).get("color", {}).get("default", "red"),
                 ): SelectSelector(
                     SelectSelectorConfig(
                         options=["red", "orange", "green", "blue", "purple"],
@@ -157,11 +182,13 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
                 ),
                 vol.Optional(
                     "marker_popup_title",
-                    default=options.get("marker_popup_title", "friendly_name"),
+                    default=options.get("marker_popup_title")
+                    or options.get("marker", {}).get("popup", {}).get("title", "friendly_name"),
                 ): TextSelector(TextSelectorConfig()),
                 vol.Optional(
                     "marker_popup_body",
-                    default=options.get("marker_popup_body", ""),
+                    default=options.get("marker_popup_body")
+                    or options.get("marker", {}).get("popup", {}).get("body", ""),
                 ): TextSelector(TextSelectorConfig()),
             }
         )
