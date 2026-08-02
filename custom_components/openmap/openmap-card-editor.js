@@ -1,20 +1,102 @@
-import { LitElement, html, css } from "https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js";
-
 /**
  * OpenMap Card Editor - v0.2.1
  * Visual configuration editor for the Open Map custom card
+ * Vanilla Web Component (no external dependencies)
  */
 
-class OpenmapCardEditor extends LitElement {
-  static get properties() {
-    return {
-      hass: { type: Object },
-      config: { type: Object },
-    };
+class OpenmapCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._hass = null;
+    this._config = {};
   }
 
-  static get styles() {
-    return css`
+  set hass(hass) {
+    this._hass = hass;
+    this._render();
+  }
+
+  setConfig(config) {
+    this._config = { ...config };
+    this._render();
+  }
+
+  _fireConfigChange() {
+    this.dispatchEvent(new CustomEvent("config-changed", {
+      detail: { config: this._config },
+      bubbles: true,
+      composed: true
+    }));
+  }
+
+  _valueChanged(ev) {
+    const target = ev.target;
+    const value = target.type === "checkbox" ? target.checked : target.value;
+    const key = target.configKey;
+    if (!key) return;
+
+    const newConfig = { ...this._config, [key]: value };
+    this._config = newConfig;
+    this._fireConfigChange();
+  }
+
+  _entityChanged(ev) {
+    const value = ev.detail.value;
+    const key = ev.target.configKey;
+    if (!key) return;
+
+    const newConfig = { ...this._config };
+    if (key === "entities") {
+      newConfig[key] = value;
+    }
+    this._config = newConfig;
+    this._fireConfigChange();
+  }
+
+  _multiEntityChanged(ev) {
+    const value = ev.detail.value;
+    const key = ev.target.configKey;
+    if (!key) return;
+
+    const newConfig = { ...this._config };
+    newConfig[key] = value;
+    this._config = newConfig;
+    this._fireConfigChange();
+  }
+
+  _colorChanged(color) {
+    const newConfig = {
+      ...this._config,
+      marker: { ...this._config.marker, color: { ...this._config.marker?.color, default: color } }
+    };
+    this._config = newConfig;
+    this._fireConfigChange();
+  }
+
+  _getEntities() {
+    if (!this._hass) return [];
+    return Object.keys(this._hass.states).filter(eid =>
+      eid.startsWith("device_tracker.") ||
+      eid.startsWith("person.") ||
+      eid.startsWith("zone.") ||
+      eid.startsWith("geo_location.")
+    );
+  }
+
+  _getGeoSources() {
+    if (!this._hass) return [];
+    const sources = new Set();
+    Object.values(this._hass.states).forEach(s => {
+      if (s.entity_id.startsWith("geo_location.") && s.attributes?.source) {
+        sources.add(s.attributes.source);
+      }
+    });
+    return Array.from(sources).sort();
+  }
+
+  _getStyle() {
+    return `
       :host { display: block; }
       .editor-section { margin-bottom: 16px; }
       .editor-section h3 { margin: 0 0 12px; font-size: 14px; font-weight: 600; color: var(--primary-text-color); }
@@ -33,99 +115,36 @@ class OpenmapCardEditor extends LitElement {
     `;
   }
 
-  setConfig(config) {
-    this.config = { ...config };
-  }
-
-  _valueChanged(ev) {
-    const target = ev.target;
-    const value = target.type === "checkbox" ? target.checked : target.value;
-    const key = target.configKey;
-    if (!key) return;
-
-    const newConfig = { ...this.config, [key]: value };
-    this.config = newConfig;
-    this._fireConfigChange();
-  }
-
-  _entityChanged(ev) {
-    const value = ev.detail.value;
-    const key = ev.target.configKey;
-    if (!key) return;
-
-    const newConfig = { ...this.config };
-    if (key === "entities") {
-      newConfig[key] = value;
-    }
-    this.config = newConfig;
-    this._fireConfigChange();
-  }
-
-  _multiEntityChanged(ev) {
-    const value = ev.detail.value;
-    const key = ev.target.configKey;
-    if (!key) return;
-
-    const newConfig = { ...this.config };
-    newConfig[key] = value;
-    this.config = newConfig;
-    this._fireConfigChange();
-  }
-
-  _colorChanged(color) {
-    const newConfig = {
-      ...this.config,
-      marker: { ...this.config.marker, color: { ...this.config.marker?.color, default: color } }
-    };
-    this.config = newConfig;
-    this._fireConfigChange();
-  }
-
-  _fireConfigChange() {
-    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: this.config }, bubbles: true, composed: true }));
-  }
-
-  _getEntities() {
-    if (!this.hass) return [];
-    return Object.keys(this.hass.states).filter(eid => eid.startsWith("device_tracker.") || eid.startsWith("person.") || eid.startsWith("zone.") || eid.startsWith("geo_location."));
-  }
-
-  _getGeoSources() {
-    if (!this.hass) return [];
-    const sources = new Set();
-    Object.values(this.hass.states).forEach(s => {
-      if (s.entity_id.startsWith("geo_location.") && s.attributes?.source) {
-        sources.add(s.attributes.source);
-      }
-    });
-    return Array.from(sources).sort();
-  }
-
-  render() {
-    if (!this.hass) return html`<div>Loading...</div>`;
+  _renderTemplate() {
+    if (!this._hass) return `<div>Loading...</div>`;
 
     const entities = this._getEntities();
     const geoSources = this._getGeoSources();
     const colors = ["red", "orange", "green", "blue", "purple"];
+    const cfg = this._config;
 
-    return html`
+    const entityOptions = entities.map(e => `<option value="${e}">${e}</option>`).join("");
+    const geoSourceOptions = geoSources.map(s => `<option value="${s}">${s}</option>`).join("");
+
+    return `
+      <style>${this._getStyle()}</style>
       <div class="editor-section">
         <h3>General</h3>
         <div class="field">
           <label class="field-label">Title</label>
-          <input type="text" .value=${this.config.title || ""} configKey="title" @input=${this._valueChanged} placeholder="Open Map">
+          <input type="text" value="${cfg.title || ""}" configKey="title" placeholder="Open Map">
         </div>
         <div class="field-row">
           <div class="field">
             <label class="field-label">Default Zoom</label>
-            <input type="number" min="1" max="19" step="1" .value=${this.config.default_zoom || 7} configKey="default_zoom" @input=${this._valueChanged}>
+            <input type="number" min="1" max="19" step="1" value="${cfg.default_zoom || 7}" configKey="default_zoom">
           </div>
           <div class="field">
             <label class="field-label">Dark Mode</label>
-            <select .value=${this.config.dark_mode || "auto"} configKey="dark_mode" @change=${this._valueChanged}>
-              <option value="auto">Auto</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
+            <select configKey="dark_mode">
+              <option value="auto" ${cfg.dark_mode === "auto" ? "selected" : ""}>Auto</option>
+              <option value="light" ${cfg.dark_mode === "light" ? "selected" : ""}>Light</option>
+              <option value="dark" ${cfg.dark_mode === "dark" ? "selected" : ""}>Dark</option>
             </select>
           </div>
         </div>
@@ -137,11 +156,11 @@ class OpenmapCardEditor extends LitElement {
         <div class="field-row">
           <div class="field">
             <label class="field-label">Latitude</label>
-            <input type="number" step="0.000001" min="-90" max="90" .value=${this.config.center_lat !== undefined ? this.config.center_lat : ""} configKey="center_lat" @input=${this._valueChanged} placeholder="e.g. 48.815">
+            <input type="number" step="0.000001" min="-90" max="90" value="${cfg.center_lat !== undefined ? cfg.center_lat : ""}" configKey="center_lat" placeholder="e.g. 48.815">
           </div>
           <div class="field">
             <label class="field-label">Longitude</label>
-            <input type="number" step="0.000001" min="-180" max="180" .value=${this.config.center_lon !== undefined ? this.config.center_lon : ""} configKey="center_lon" @input=${this._valueChanged} placeholder="e.g. 9.2">
+            <input type="number" step="0.000001" min="-180" max="180" value="${cfg.center_lon !== undefined ? cfg.center_lon : ""}" configKey="center_lon" placeholder="e.g. 9.2">
           </div>
         </div>
       </div>
@@ -151,13 +170,12 @@ class OpenmapCardEditor extends LitElement {
         <div class="field">
           <label class="field-label">Explicit Entities</label>
           <ha-entity-picker
-            .hass=${this.hass}
-            .value=${this.config.entities || []}
-            .configValue=${this.config.entities || []}
+            .hass="${this._hass}"
+            .value="${(cfg.entities || []).join(",")}"
+            .configValue="${cfg.entities || []}"
             allow-custom-entity
             multiple
             configKey="entities"
-            @value-changed=${this._multiEntityChanged}
             include-domains="device_tracker,person,zone,sensor"
           ></ha-entity-picker>
           <div class="helper-text">Select device trackers, persons, zones, or sensors with latitude/longitude attributes</div>
@@ -166,11 +184,10 @@ class OpenmapCardEditor extends LitElement {
         <div class="field">
           <label class="field-label">Geolocation Sources</label>
           <ha-select
-            .value=${this.config.geolocation_sources || []}
-            .items=${geoSources}
+            .value="${cfg.geolocation_sources || []}"
+            .items="${geoSources}"
             multiple
             configKey="geolocation_sources"
-            @value-changed=${this._valueChanged}
             placeholder="Select sources (e.g. gpslogger, icloud)"
           ></ha-select>
           <div class="helper-text">Include all geo_location entities matching these sources</div>
@@ -180,14 +197,8 @@ class OpenmapCardEditor extends LitElement {
           <label class="field-label">Include Domains</label>
           <input
             type="text"
-            .value=${(this.config.include_domains || []).join(",")}
+            value="${(cfg.include_domains || []).join(",")}"
             configKey="include_domains"
-            @input=${ev => {
-              const value = ev.target.value.split(",").map(s => s.trim()).filter(Boolean);
-              const newConfig = { ...this.config, include_domains: value };
-              this.config = newConfig;
-              this._fireConfigChange();
-            }}
             placeholder="zone,device_tracker,person"
           />
           <div class="helper-text">Comma-separated list of domains to include all entities with lat/lon</div>
@@ -199,14 +210,14 @@ class OpenmapCardEditor extends LitElement {
         <div class="field">
           <label class="field-label">Default Marker Color</label>
           <div class="color-options">
-            ${colors.map(color => html`
+            ${colors.map(color => `
               <div
-                class="color-option ${(this.config.marker?.color?.default || "red") === color ? "selected" : ""}"
+                class="color-option ${(cfg.marker?.color?.default || "red") === color ? "selected" : ""}"
                 style="background: ${color}"
-                @click=${() => this._colorChanged(color)}
-                title=${color}
+                data-color="${color}"
+                title="${color}"
               ></div>
-            `)}
+            `).join("")}
           </div>
         </div>
       </div>
@@ -215,27 +226,50 @@ class OpenmapCardEditor extends LitElement {
         <h3>Popup Configuration</h3>
         <div class="field">
           <label class="field-label">Popup Title Template</label>
-          <input type="text" .value=${this.config.marker?.popup?.title || "friendly_name"} configKey="marker_popup_title" @input=${ev => {
-            const newConfig = { ...this.config, marker: { ...this.config.marker, popup: { ...this.config.marker?.popup, title: ev.target.value } } };
-            this.config = newConfig;
-            this._fireConfigChange();
-          }} placeholder="friendly_name or {attribute}">
+          <input type="text" value="${cfg.marker?.popup?.title || "friendly_name"}" configKey="marker_popup_title" placeholder="friendly_name or {attribute}">
           <div class="helper-text">Use {attribute} syntax to insert entity attributes (e.g. {friendly_name}, {last_seen})</div>
         </div>
         <div class="field">
           <label class="field-label">Popup Body Template</label>
-          <input type="text" .value=${this.config.marker?.popup?.body || ""} configKey="marker_popup_body" @input=${ev => {
-            const newConfig = { ...this.config, marker: { ...this.config.marker, popup: { ...this.config.marker?.popup, body: ev.target.value } } };
-            this.config = newConfig;
-            this._fireConfigChange();
-          }} placeholder="Last seen: {last_seen}">
+          <input type="text" value="${cfg.marker?.popup?.body || ""}" configKey="marker_popup_body" placeholder="Last seen: {last_seen}">
         </div>
         <div class="field">
           <label class="field-label">Attribution Text</label>
-          <input type="text" .value=${this.config.attribution || ""} configKey="attribution" @input=${this._valueChanged} placeholder="Custom attribution">
+          <input type="text" value="${cfg.attribution || ""}" configKey="attribution" placeholder="Custom attribution">
         </div>
       </div>
     `;
+  }
+
+  _render() {
+    this.shadowRoot.innerHTML = this._renderTemplate();
+    this._attachEventListeners();
+  }
+
+  _attachEventListeners() {
+    // Input/Select change handlers
+    this.shadowRoot.querySelectorAll("input, select").forEach(el => {
+      el.addEventListener("change", (ev) => this._valueChanged(ev));
+      el.addEventListener("input", (ev) => this._valueChanged(ev));
+    });
+
+    // Entity picker
+    this.shadowRoot.querySelectorAll("ha-entity-picker").forEach(el => {
+      el.addEventListener("value-changed", (ev) => this._multiEntityChanged(ev));
+    });
+
+    // HA Select
+    this.shadowRoot.querySelectorAll("ha-select").forEach(el => {
+      el.addEventListener("value-changed", (ev) => this._valueChanged(ev));
+    });
+
+    // Color options
+    this.shadowRoot.querySelectorAll(".color-option").forEach(el => {
+      el.addEventListener("click", (ev) => {
+        const color = ev.currentTarget.dataset.color;
+        this._colorChanged(color);
+      });
+    });
   }
 }
 

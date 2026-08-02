@@ -53,7 +53,11 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
 
     def __init__(self, config_entry):
         """Initialize options flow."""
-        super().__init__(config_entry)
+        self._config_entry = config_entry
+
+    @property
+    def config_entry(self):
+        return self._config_entry
 
     async def async_step_init(self, user_input=None):
         """Manage the options."""

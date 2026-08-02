@@ -271,6 +271,7 @@ const OpenMapCard = (() => {
     _tryInit() {
       if (!this._isPanel || !this._hass || this._ready) return;
       this._ready = true;
+      this._connected = true;
       this._render();
       this._showLoading();
       loadLeaflet()
@@ -286,8 +287,8 @@ const OpenMapCard = (() => {
     }
 
     connectedCallback() {
-      if (this._isPanel) return;
       this._connected = true;
+      if (this._isPanel) return;
       this._render();
       this._showLoading();
       loadLeaflet()
@@ -369,6 +370,9 @@ const OpenMapCard = (() => {
       if (!this._L) return;
       const container = this.querySelector(".om-map");
       if (!container) return;
+
+      // Clear loading/error content before initializing map
+      container.innerHTML = "";
 
       // Disconnect existing observers before re-initializing map
       if (this._resizeObserver) {
