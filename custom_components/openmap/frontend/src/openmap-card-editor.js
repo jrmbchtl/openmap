@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 
-const CARD_VERSION = "0.2.1";
+const CARD_VERSION = "0.2.2";
 
 class OpenmapCardEditor extends LitElement {
   static properties = {
@@ -83,7 +83,6 @@ class OpenmapCardEditor extends LitElement {
           center_lon: cfg.center_lon !== undefined ? cfg.center_lon : "",
           dark_mode: cfg.dark_mode || "auto",
           attribution: cfg.attribution || "",
-          entities: cfg.entities || [],
         }}
         .schema=${[
           { name: "title", label: "Title", selector: { text: {} } },
@@ -92,15 +91,28 @@ class OpenmapCardEditor extends LitElement {
           { name: "center_lon", label: "Map Center Longitude", selector: { number: { min: -180, max: 180, step: 0.000001 } } },
           { name: "dark_mode", label: "Dark Mode", selector: { select: { options: ["auto", "light", "dark"] } } },
           { name: "attribution", label: "Custom Attribution", selector: { text: {} } },
-          {
-            name: "entities",
-            label: "Explicit Entities",
-            selector: { entity: { multiple: true, include_entities: [] } },
-          },
         ]}
         .computeLabel=${(s) => s.label}
         @value-changed=${this._handleSimpleChange}
       ></ha-form>
+
+      <div class="section">
+        <p class="section-title">Explicit Entities</p>
+        <p class="section-hint">
+          Select device trackers, persons, zones, or sensors with latitude/longitude attributes.
+        </p>
+        <ha-entity-picker
+          .hass=${this.hass}
+          .value=${(cfg.entities || []).join(",")}
+          .includeDomains=${["device_tracker", "person", "zone", "sensor", "geo_location"]}
+          allow-custom-entity
+          @value-changed=${(e) => {
+            const raw = e.detail?.value || "";
+            this.config = { ...this.config, entities: raw.split(",").map(s => s.trim()).filter(Boolean) };
+            this._emit();
+          }}
+        ></ha-entity-picker>
+      </div>
 
       <div class="section">
         <p class="section-title">Geolocation Sources</p>
@@ -181,10 +193,10 @@ class OpenmapCardEditor extends LitElement {
   }
 }
 
-try {
+if (!customElements.get("openmap-card-editor")) {
   customElements.define("openmap-card-editor", OpenmapCardEditor);
-} catch (e) {
-  // already defined
+} else {
+  // Already defined (possibly by a stale old resource); leave it alone.
 }
 
 export { OpenmapCardEditor };

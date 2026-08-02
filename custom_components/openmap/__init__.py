@@ -38,7 +38,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     try:
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(JS_PATH, local_card_path, cache_headers=True)]
+            [StaticPathConfig(JS_PATH, local_card_path, cache_headers=False)]
         )
         _LOGGER.debug("Registered static path for %s", JS_PATH)
     except Exception as err:

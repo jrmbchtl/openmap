@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import L from "leaflet";
 import "./openmap-card-editor.js";
 
-const CARD_VERSION = "0.2.1";
+const CARD_VERSION = "0.2.2";
 
 // Debug logging: opt-in via ?debug=1, ?openmap_debug=1, or
 // localStorage["openmap_debug"] = "1".
@@ -233,6 +233,24 @@ class OpenmapCard extends LitElement {
     // tear the preview down without racing our microtasks.
     this._isPreview = this._isInPreviewContext();
     if (this._isPreview) return;
+
+    // Observe size so we (re)try map init once the container has real
+    // dimensions (fixes cards in hidden tabs / grids that start at 0px).
+    if (!this._resizeObserver) {
+      try {
+        this._resizeObserver = new ResizeObserver(() => {
+          if (!this._map) {
+            this._initMap();
+          } else if (this._map) {
+            this._map.invalidateSize();
+          }
+        });
+        this._resizeObserver.observe(this.shadowRoot?.getElementById("map") || this);
+      } catch (e) {
+        _dlog("connect", "ResizeObserver setup failed", e);
+      }
+    }
+
     if (this._isPanel) {
       this._tryInit();
       return;
@@ -269,6 +287,13 @@ class OpenmapCard extends LitElement {
 
   updated(changed) {
     if (this._isPreview) return;
+    if (changed.has("hass")) {
+      // Panel mode: hass is set AFTER `panel`, so (re)try init here.
+      if (this._isPanel && !this._ready && this.hass) {
+        this._tryInit();
+        return;
+      }
+    }
     if (changed.has("hass") && this.hass && this._map) {
       const relevantEntityIds = getRelevantEntityIds(this.config, this.hass);
       const curr = {};
@@ -659,10 +684,14 @@ class OpenmapCard extends LitElement {
   `;
 }
 
-try {
+if (!customElements.get("openmap-card")) {
   customElements.define("openmap-card", OpenmapCard);
-} catch (e) {
-  _dwarn("define", `openmap-card already defined: ${e}`);
+} else {
+  _dwarn(
+    "define",
+    "openmap-card already defined by another script (possible stale HACS resource). " +
+    "Remove old openmap resources from Lovelace."
+  );
 }
 
 window.customCards = window.customCards || [];

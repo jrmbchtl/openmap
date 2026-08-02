@@ -85,7 +85,7 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
         geo_sources = []
         if self.hass:
             sources = set()
-            for state in self.hass.states.values():
+            for state in self.hass.states.async_all():
                 attrs = getattr(state, "attributes", {}) or {}
                 if state.entity_id.startswith("geo_location.") and attrs.get("source"):
                     sources.add(attrs["source"])
