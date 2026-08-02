@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 
-const CARD_VERSION = "0.2.5";
+const CARD_VERSION = "0.2.6";
 
 class OpenmapCardEditor extends LitElement {
   static properties = {
@@ -49,7 +49,11 @@ class OpenmapCardEditor extends LitElement {
   _handleSimpleChange(e) {
     const values = e.detail?.value;
     if (!values || typeof values !== "object") return;
-    this.config = { ...this.config, ...values };
+    const next = { ...this.config, ...values };
+    // Never persist empty center fields (they would become [0, 0]).
+    if (next.center_lat === "" || next.center_lat == null) delete next.center_lat;
+    if (next.center_lon === "" || next.center_lon == null) delete next.center_lon;
+    this.config = next;
     this._emit();
   }
 

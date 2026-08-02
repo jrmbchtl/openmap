@@ -3,7 +3,7 @@ import L from "./leaflet-shim.js";
 import "leaflet.markercluster";
 import "./openmap-card-editor.js";
 
-const CARD_VERSION = "0.2.5";
+const CARD_VERSION = "0.2.6";
 
 // Debug logging: opt-in via ?debug=1, ?openmap_debug=1, or
 // localStorage["openmap_debug"] = "1".
@@ -232,11 +232,18 @@ class OpenmapCard extends LitElement {
     if (!merged.geo_location_sources && merged.geolocation_sources) {
       merged.geo_location_sources = merged.geolocation_sources;
     }
+    // Only treat center as configured when both values are non-empty and
+    // parse to finite numbers. Empty strings must NOT become [0, 0]
+    // (Number("") === 0), which previously moved the map to the ocean.
     if (config.center_lat !== undefined && config.center_lon !== undefined) {
-      const lat = Number(config.center_lat);
-      const lon = Number(config.center_lon);
-      if (Number.isFinite(lat) && Number.isFinite(lon)) {
-        merged.center = [lat, lon];
+      const latStr = String(config.center_lat).trim();
+      const lonStr = String(config.center_lon).trim();
+      if (latStr !== "" && lonStr !== "") {
+        const lat = Number(latStr);
+        const lon = Number(lonStr);
+        if (Number.isFinite(lat) && Number.isFinite(lon)) {
+          merged.center = [lat, lon];
+        }
       }
     }
     this.config = merged;
@@ -414,6 +421,43 @@ class OpenmapCard extends LitElement {
     return DEFAULT_CENTER;
   }
 
+  _countEntities() {
+    if (!this.hass) return 0;
+    const seen = new Set();
+    this._gatherEntities().forEach(({ state }) => {
+      if (!state.entity_id.startsWith("zone.")) seen.add(state.entity_id);
+    });
+    return seen.size;
+  }
+
+  _fitToFocus() {
+    if (!this._map) return;
+    const positions = this._gatherEntities()
+      .map(({ state }) => [
+        Number(state.attributes.latitude),
+        Number(state.attributes.longitude),
+      ])
+      .filter((p) => isValidCoordinate(p[0], p[1]));
+    if (positions.length) {
+      try {
+        this._map.fitBounds(L.latLngBounds(positions).pad(0.3), {
+          maxZoom: this.config.default_zoom || DEFAULT_ZOOM,
+        });
+        return;
+      } catch (e) {
+        _dlog("focus", "fitBounds failed", e);
+      }
+    }
+    const center = this.config.center ?? this._getDefaultCenter();
+    this._map.setView(center, this.config.default_zoom || DEFAULT_ZOOM);
+  }
+
+  _toggleCluster() {
+    this.config = { ...this.config, cluster: !this.config.cluster };
+    this._renderMarkers();
+    this.requestUpdate();
+  }
+
   get _darkMode() {
     const mode = this.config?.theme_mode || "auto";
     if (mode === "dark") return true;
@@ -425,9 +469,11 @@ class OpenmapCard extends LitElement {
     const map = this._ensureMapContainer();
     if (!map) return;
     const dark = this._darkMode;
+    const isPanel = this._isPanel || this.layout === "panel";
     map.classList.toggle("dark", dark);
     map.classList.toggle("forced-dark", this.config?.theme_mode === "dark");
     map.classList.toggle("forced-light", this.config?.theme_mode === "light");
+    map.classList.toggle("panel", isPanel);
     // Deterministically apply the dark tile filter for auto+dark too
     // (matches HA's dark map appearance without relying on class state).
     map.style.setProperty(
@@ -479,7 +525,8 @@ class OpenmapCard extends LitElement {
 
   _computePadding() {
     const root = this.shadowRoot?.getElementById("root");
-    const ignoreAspectRatio = this.layout === "panel" || this.layout === "grid";
+    const ignoreAspectRatio =
+      this.layout === "panel" || this.layout === "grid" || this._isPanel;
     if (!this.config || ignoreAspectRatio || !root) return;
     if (!this.config.aspect_ratio) {
       root.style.paddingBottom = "100%";
@@ -783,10 +830,45 @@ class OpenmapCard extends LitElement {
       return html`<div class="om-preview">Open Map</div>`;
     }
     const cfg = this.config;
+    const isPanel = this._isPanel || this.layout === "panel";
+    const entityCount = this._countEntities();
+    const btnColor = this._darkMode ? "#ffffff" : "#000000";
+    const controls = html`
+      <div id="buttons">
+        ${entityCount > 1
+          ? html`
+              <button
+                class="om-map-btn"
+                style="color:${btnColor}"
+                title="Toggle grouping"
+                @click=${this._toggleCluster}
+              >
+                <ha-icon
+                  icon=${this.config.cluster !== false
+                    ? "mdi:google-circles-communities"
+                    : "mdi:dots-hexagon"}
+                ></ha-icon>
+              </button>
+            `
+          : nothing}
+        <button
+          class="om-map-btn"
+          style="color:${btnColor}"
+          title="Reset focus"
+          @click=${this._fitToFocus}
+        >
+          <ha-icon icon="mdi:image-filter-center-focus"></ha-icon>
+        </button>
+      </div>
+    `;
+    if (isPanel) {
+      // Fullscreen panel: no card frame, no rounded corners.
+      return html`<div id="root">${controls}</div>`;
+    }
     return html`
       <ha-card>
         ${cfg.title ? html`<h1 class="card-header">${cfg.title}</h1>` : nothing}
-        <div id="root"></div>
+        <div id="root">${controls}</div>
         ${cfg.attribution ? html`<div class="om-att">${cfg.attribution}</div>` : nothing}
       </ha-card>
     `;
@@ -886,14 +968,46 @@ class OpenmapCard extends LitElement {
       font: bold 18px "Helvetica Neue", Arial, Helvetica, sans-serif;
     }
     #map .leaflet-control-zoom a:hover { background-color: #fff; }
-    #map .leaflet-control-zoom a:first-child {
-      border-top-left-radius: 4px;
-      border-top-right-radius: 4px;
+    /* Square corners on the side control; rounding is applied by the card
+       container (#map) so only the dashboard element shows rounded corners. */
+    #map .leaflet-control-zoom a:first-child,
+    #map .leaflet-control-zoom a:last-child {
+      border-radius: 0;
     }
     #map .leaflet-control-zoom a:last-child {
-      border-bottom-left-radius: 4px;
-      border-bottom-right-radius: 4px;
       border-bottom: none;
+    }
+    #map.panel {
+      border-radius: 0;
+    }
+    #buttons {
+      position: absolute;
+      top: 75px;
+      left: 3px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      z-index: 1001;
+    }
+    .om-map-btn {
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.1));
+      border-radius: 4px;
+      background: var(--card-background-color, rgba(255, 255, 255, 0.9));
+      color: var(--primary-text-color);
+      cursor: pointer;
+      padding: 0;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    }
+    .om-map-btn:hover {
+      background: var(--secondary-background-color, #fff);
+    }
+    .om-map-btn ha-icon {
+      --mdc-icon-size: 20px;
     }
     #map .leaflet-tooltip {
       padding: 8px;
