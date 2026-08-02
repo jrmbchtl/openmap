@@ -2,6 +2,7 @@
 
 import logging
 
+from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.panel_custom import async_register_panel
 from homeassistant.config_entries import ConfigEntry
@@ -20,46 +21,50 @@ WEBCOMPONENT_NAME = "openmap-card"
 PLATFORMS = ["diagnostics"]
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Open Map from a config entry."""
-
-    domain_data = hass.data.setdefault(DOMAIN, {})
-    entries = domain_data.setdefault("_entries", {})
-    entries[entry.entry_id] = entry
-
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Set up Open Map integration (called at HA startup)."""
+    # Register static paths so the card JS is served at /api/openmap/...
     local_card_path = hass.config.path("custom_components/openmap/openmap-card.js")
     local_editor_path = hass.config.path("custom_components/openmap/openmap-card-editor.js")
 
-    if not domain_data.get("_static_registered"):
-        try:
-            await hass.http.async_register_static_paths([
-                StaticPathConfig(JS_PATH, local_card_path, cache_headers=True),
-                StaticPathConfig(EDITOR_JS_PATH, local_editor_path, cache_headers=True),
-            ])
-            domain_data["_static_registered"] = True
-            _LOGGER.debug("Registered static paths for %s and %s", JS_PATH, EDITOR_JS_PATH)
-        except Exception as err:
-            _LOGGER.exception("Failed to register static paths")
-            entries.pop(entry.entry_id, None)
-            raise ConfigEntryNotReady("Failed to register static paths") from err
+    try:
+        await hass.http.async_register_static_paths([
+            StaticPathConfig(JS_PATH, local_card_path, cache_headers=True),
+            StaticPathConfig(EDITOR_JS_PATH, local_editor_path, cache_headers=True),
+        ])
+        _LOGGER.debug("Registered static paths for %s and %s", JS_PATH, EDITOR_JS_PATH)
+    except Exception as err:
+        _LOGGER.exception("Failed to register static paths")
+        raise ConfigEntryNotReady("Failed to register static paths") from err
 
-    if not domain_data.get("_panel_registered"):
-        try:
-            await async_register_panel(
-                hass,
-                frontend_url_path=PANEL_URL_PATH,
-                webcomponent_name=WEBCOMPONENT_NAME,
-                sidebar_title="Open Map",
-                sidebar_icon="mdi:map",
-                module_url=JS_PATH,
-                require_admin=False,
-            )
-            domain_data["_panel_registered"] = True
-            _LOGGER.debug("Registered sidebar panel")
-        except Exception as err:
-            _LOGGER.exception("Failed to register sidebar panel")
-            entries.pop(entry.entry_id, None)
-            raise ConfigEntryNotReady("Failed to register sidebar panel") from err
+    # Register JS as extra resources so Lovelace loads them automatically
+    add_extra_js_url(hass, JS_PATH)
+    add_extra_js_url(hass, EDITOR_JS_PATH)
+
+    # Register sidebar panel
+    try:
+        await async_register_panel(
+            hass,
+            frontend_url_path=PANEL_URL_PATH,
+            webcomponent_name=WEBCOMPONENT_NAME,
+            sidebar_title="Open Map",
+            sidebar_icon="mdi:map",
+            module_url=JS_PATH,
+            require_admin=False,
+        )
+        _LOGGER.debug("Registered sidebar panel")
+    except Exception as err:
+        _LOGGER.exception("Failed to register sidebar panel")
+        raise ConfigEntryNotReady("Failed to register sidebar panel") from err
+
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up Open Map from a config entry."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    entries = domain_data.setdefault("_entries", {})
+    entries[entry.entry_id] = entry
 
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
@@ -69,7 +74,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload an Open Map config entry."""
-
     domain_data = hass.data.get(DOMAIN, {})
     entries = domain_data.get("_entries", {})
 
