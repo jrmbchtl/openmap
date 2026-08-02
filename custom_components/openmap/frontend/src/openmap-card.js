@@ -3,7 +3,7 @@ import L from "./leaflet-shim.js";
 import "leaflet.markercluster";
 import "./openmap-card-editor.js";
 
-const CARD_VERSION = "0.2.4";
+const CARD_VERSION = "0.2.5";
 
 // Debug logging: opt-in via ?debug=1, ?openmap_debug=1, or
 // localStorage["openmap_debug"] = "1".
@@ -198,7 +198,23 @@ class OpenmapCard extends LitElement {
     this._invalidateDebounced = debounce(() => this._invalidateSize(), 100);
     this._resizeObserver = null;
     this._visibilityObserver = null;
+    this._mapNode = null;
     this._debug = _isDebugFromUrl();
+  }
+
+  // The Leaflet container is created imperatively and kept OUTSIDE the Lit
+  // template so re-renders (theme changes, config edits) can never orphan the
+  // map instance (matches Home Assistant's own ha-map implementation).
+  _ensureMapContainer() {
+    const root = this.shadowRoot?.getElementById("root");
+    if (!root) return null;
+    let map = root.querySelector("#map");
+    if (!map) {
+      map = document.createElement("div");
+      map.id = "map";
+      root.appendChild(map);
+    }
+    return map;
   }
 
   setConfig(config) {
@@ -293,7 +309,7 @@ class OpenmapCard extends LitElement {
             this._invalidateDebounced();
           }
         });
-        this._resizeObserver.observe(this.shadowRoot?.getElementById("map") || this);
+        this._resizeObserver.observe(this._ensureMapContainer() || this);
       } catch (e) {
         _dlog("connect", "ResizeObserver setup failed", e);
       }
@@ -330,6 +346,7 @@ class OpenmapCard extends LitElement {
       this._visibilityObserver = null;
     }
     this._markerLayer = null;
+    this._mapNode = null;
     this._ready = false;
   }
 
@@ -350,6 +367,22 @@ class OpenmapCard extends LitElement {
     }
     if (changed.has("config")) {
       this._computePadding();
+    }
+    // Diagnostic: confirm the Leaflet container survives re-renders. If the
+    // node identity ever changes the map would be orphaned (solid-color map).
+    if (this._map && this._mapNode) {
+      const current = this._ensureMapContainer();
+      if (current !== this._mapNode) {
+        _dlog("map-node", "container node replaced during update; re-initializing");
+        this._mapNode = current;
+        if (this._map) {
+          this._map.remove();
+          this._map = null;
+          this._markerLayer = null;
+          this._tileLayer = null;
+        }
+        this._initMap();
+      }
     }
     if (changed.has("hass") && this.hass && this._map) {
       const relevantEntityIds = getRelevantEntityIds(this.config, this.hass);
@@ -389,7 +422,7 @@ class OpenmapCard extends LitElement {
   }
 
   _updateMapStyle() {
-    const map = this.shadowRoot?.getElementById("map");
+    const map = this._ensureMapContainer();
     if (!map) return;
     const dark = this._darkMode;
     map.classList.toggle("dark", dark);
@@ -463,11 +496,12 @@ class OpenmapCard extends LitElement {
   _initMap() {
     if (this._isPreview) return;
     if (this._map) return;
-    const container = this.shadowRoot?.getElementById("map");
+    const container = this._ensureMapContainer();
     if (!container) {
       _dlog("init", "no #map container, aborting");
       return;
     }
+    this._mapNode = container;
     const rect = container.getBoundingClientRect();
     if (rect.width < MIN_SIZE_W || rect.height < MIN_SIZE_H) {
       _dlog("init", "container too small, waiting", { w: rect.width, h: rect.height });
@@ -541,13 +575,13 @@ class OpenmapCard extends LitElement {
   }
 
   _showLoading(message = "Loading map...") {
-    const container = this.shadowRoot?.getElementById("map");
+    const container = this._ensureMapContainer();
     if (!container) return;
     container.innerHTML = `<div class="om-loading">${esc(message)}</div>`;
   }
 
   _showError(message) {
-    const container = this.shadowRoot?.getElementById("map");
+    const container = this._ensureMapContainer();
     if (!container) return;
     container.innerHTML = `<div class="om-error">${esc(message)}</div>`;
   }
@@ -752,7 +786,7 @@ class OpenmapCard extends LitElement {
     return html`
       <ha-card>
         ${cfg.title ? html`<h1 class="card-header">${cfg.title}</h1>` : nothing}
-        <div id="root"><div id="map"></div></div>
+        <div id="root"></div>
         ${cfg.attribution ? html`<div class="om-att">${cfg.attribution}</div>` : nothing}
       </ha-card>
     `;
