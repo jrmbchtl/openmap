@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 
-const CARD_VERSION = "0.2.2";
+const CARD_VERSION = "0.2.3";
 
 class OpenmapCardEditor extends LitElement {
   static properties = {
@@ -68,28 +68,44 @@ class OpenmapCardEditor extends LitElement {
     this._emit();
   }
 
+  _setMarkerValue(e) {
+    const key = e.target.name;
+    let value = e.target.value;
+    if (key === "size") value = Number(value) || 48;
+    this.config = {
+      ...this.config,
+      marker: { ...this.config.marker, [key]: value },
+    };
+    this._emit();
+  }
+
   render() {
     if (!this.hass) return nothing;
     const cfg = this.config;
     const colors = ["red", "orange", "green", "blue", "purple"];
+    const themeMode = cfg.theme_mode || cfg.dark_mode || "auto";
 
     return html`
       <ha-form
         .hass=${this.hass}
         .data=${{
           title: cfg.title || "",
-          default_zoom: cfg.default_zoom || 7,
+          default_zoom: cfg.default_zoom || 14,
           center_lat: cfg.center_lat !== undefined ? cfg.center_lat : "",
           center_lon: cfg.center_lon !== undefined ? cfg.center_lon : "",
-          dark_mode: cfg.dark_mode || "auto",
+          theme_mode: themeMode,
+          cluster: cfg.cluster !== false,
+          aspect_ratio: cfg.aspect_ratio || "",
           attribution: cfg.attribution || "",
         }}
         .schema=${[
           { name: "title", label: "Title", selector: { text: {} } },
-          { name: "default_zoom", label: "Default Zoom", selector: { number: { min: 1, max: 19, step: 1 } } },
+          { name: "default_zoom", label: "Default Zoom", selector: { number: { min: 1, max: 20, step: 1 } } },
           { name: "center_lat", label: "Map Center Latitude", selector: { number: { min: -90, max: 90, step: 0.000001 } } },
           { name: "center_lon", label: "Map Center Longitude", selector: { number: { min: -180, max: 180, step: 0.000001 } } },
-          { name: "dark_mode", label: "Dark Mode", selector: { select: { options: ["auto", "light", "dark"] } } },
+          { name: "theme_mode", label: "Theme Mode", selector: { select: { options: ["auto", "light", "dark"] } } },
+          { name: "cluster", label: "Cluster Markers", selector: { boolean: {} } },
+          { name: "aspect_ratio", label: "Aspect Ratio (e.g. 1:1)", selector: { text: {} } },
           { name: "attribution", label: "Custom Attribution", selector: { text: {} } },
         ]}
         .computeLabel=${(s) => s.label}
@@ -121,11 +137,11 @@ class OpenmapCardEditor extends LitElement {
         </p>
         <ha-entity-picker
           .hass=${this.hass}
-          .value=${(cfg.geolocation_sources || []).join(",")}
+          .value=${(cfg.geo_location_sources || cfg.geolocation_sources || []).join(",")}
           .includeDomains=${["geo_location"]}
           @value-changed=${(e) => {
             const raw = e.detail?.value || "";
-            this.config = { ...this.config, geolocation_sources: raw.split(",").map(s => s.trim()).filter(Boolean) };
+            this.config = { ...this.config, geo_location_sources: raw.split(",").map(s => s.trim()).filter(Boolean) };
             this._emit();
           }}
         ></ha-entity-picker>
@@ -145,11 +161,35 @@ class OpenmapCardEditor extends LitElement {
       </div>
 
       <div class="section">
-        <p class="section-title">Default Marker Color</p>
+        <p class="section-title">Marker Appearance</p>
+        <div class="field-row">
+          <input
+            type="number"
+            name="size"
+            min="24"
+            max="96"
+            step="2"
+            .value=${cfg.marker?.size || 48}
+            @input=${this._setMarkerValue}
+            title="Marker size (px)"
+            placeholder="Marker size (px)"
+          />
+          <select
+            name="label_mode"
+            @change=${this._setMarkerValue}
+            title="Marker label mode"
+          >
+            <option value="initials" ${(cfg.marker?.label_mode || "initials") === "initials" ? "selected" : ""}>Initials</option>
+            <option value="name" ${cfg.marker?.label_mode === "name" ? "selected" : ""}>Name</option>
+            <option value="state" ${cfg.marker?.label_mode === "state" ? "selected" : ""}>State</option>
+            <option value="icon" ${cfg.marker?.label_mode === "icon" ? "selected" : ""}>Icon</option>
+          </select>
+        </div>
+        <p class="section-hint">Default marker color:</p>
         <div class="color-options">
           ${colors.map(color => html`
             <div
-              class="color-option ${(cfg.marker?.color?.default || "red") === color ? "selected" : ""}"
+              class="color-option ${(cfg.marker?.color?.default || "default") === color ? "selected" : ""}"
               style="background:${color}"
               @click=${() => this._colorChanged(color)}
               title=${color}
