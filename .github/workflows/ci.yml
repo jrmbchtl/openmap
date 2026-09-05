@@ -58,4 +58,4 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest-homeassistant-custom-component
       - name: Run tests
-        run: pytest tests/ -v --timeout=60 --cov=custom_components/openmap --cov-report=term
+        run: python -m pytest tests/ -v --timeout=60 --cov=custom_components/openmap --cov-report=term
