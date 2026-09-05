@@ -1,10 +1,10 @@
 """Diagnostics support for Open Map integration."""
 
+from typing import Any
+
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-
-from .const import DOMAIN
 
 TO_REDACT = {
     "latitude",
@@ -15,8 +15,14 @@ TO_REDACT = {
     "center",
 }
 
-async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigEntry):
+
+async def async_get_config_entry_diagnostics(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
-    # Redact sensitive location data from both entry data and options
-    data = {**entry.data, **entry.options}
-    return async_redact_data(data, TO_REDACT)
+    return {
+        "entry": {
+            "data": async_redact_data(dict(entry.data), TO_REDACT),
+            "options": async_redact_data(dict(entry.options), TO_REDACT),
+        }
+    }

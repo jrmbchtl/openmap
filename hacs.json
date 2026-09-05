@@ -1,7 +1,5 @@
 {
   "name": "Open Map",
   "render_readme": true,
-  "content_in_root": false,
-  "version": "0.2.9",
-  "homeassistant": "2024.1.0"
+  "homeassistant": "2026.8.0"
 }

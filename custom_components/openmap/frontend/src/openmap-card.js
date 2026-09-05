@@ -3,7 +3,7 @@ import L from "./leaflet-shim.js";
 import "leaflet.markercluster";
 import "./openmap-card-editor.js";
 
-const CARD_VERSION = "0.2.9";
+const CARD_VERSION = "0.3.0";
 
 // Debug logging: opt-in via ?debug=1, ?openmap_debug=1, or
 // localStorage["openmap_debug"] = "1".
@@ -22,7 +22,6 @@ const _isDebugFromUrl = () => {
 const _dlog = (tag, ...args) => {
   if (typeof window === "undefined" || !window.__OPENMAP_DEBUG) return;
   try {
-    // eslint-disable-next-line no-console
     console.log(`%c[openmap ${tag}]`, "color:#4caf50;font-weight:600", ...args);
   } catch (e) {
     // ignore
@@ -31,7 +30,6 @@ const _dlog = (tag, ...args) => {
 
 const _dwarn = (tag, ...args) => {
   try {
-    // eslint-disable-next-line no-console
     console.warn(`[openmap ${tag}]`, ...args);
   } catch (e) {
     // ignore
@@ -252,6 +250,12 @@ class OpenmapCard extends LitElement {
 
   set panel(val) {
     this._isPanel = true;
+    // Panel mode must opt out of the card height chain: HA >= 2026.8 hosts
+    // panels in a block container with height:auto, so percentage heights
+    // collapse to 0 and Leaflet aborts init on a zero-sized container
+    // (leaving only the dark panel background). Viewport units are what
+    // HA's own map panel uses, and are immune to that host change.
+    this.classList.add("panel-mode");
     this.setConfig(val.config || {});
     this._tryInit();
   }
@@ -923,6 +927,15 @@ class OpenmapCard extends LitElement {
       height: 100%;
       box-sizing: border-box;
     }
+    /* Panel mode: size to the viewport instead of the host chain. The panel
+       is registered with handle_safe_area so we apply the insets ourselves
+       (ha-panel-custom's own safe-area padding would double them). */
+    :host(.panel-mode) {
+      height: 100vh;
+      height: 100dvh;
+      padding: var(--safe-area-inset-top, 0px) var(--safe-area-inset-right, 0px)
+        var(--safe-area-inset-bottom, 0px) var(--safe-area-inset-left, 0px);
+    }
     ha-card {
       width: 100%;
       height: 100%;
@@ -935,6 +948,9 @@ class OpenmapCard extends LitElement {
       height: 100%;
       flex: 1 1 auto;
       overflow: hidden;
+      /* Never render a zero-height (blank/black) card if a host layout
+         collapses: Leaflet refuses to init below these bounds. */
+      min-height: 200px;
     }
     #map {
       position: absolute;
@@ -1273,7 +1289,7 @@ window.customCards.push({
   name: "Open Map Card",
   description: "Extensible replacement for the built-in Home Assistant map card",
   preview: false,
-  documentationURL: "https://github.com/your-username/openmap",
+  documentationURL: "https://github.com/jrmbchtl/openmap",
 });
 
 export { OpenmapCard };

@@ -21,7 +21,7 @@ A drop-in replacement for Home Assistant's built-in map card with a plugin-ready
 1. Ensure [HACS](https://hacs.xyz) is installed
 2. Add this repository as a **custom repository** in HACS:
    - Type: **Integration**
-   - URL: `https://github.com/your-username/openmap`
+   - URL: `https://github.com/jrmbchtl/openmap`
 3. Click **Install**
 4. **Restart Home Assistant**
 5. The "Open Map" panel appears in your sidebar
@@ -95,17 +95,33 @@ marker:
 | `geolocation_sources` | `[]` | Geo-location source names to include |
 | `include_domains` | `[]` | Domain names whose entities to include |
 | `default_zoom` | `7` | Initial zoom level |
-| `center` | `[48.8, 9.2]` | Initial map center `[lat, lon]` |
-| `dark_mode` | `"auto"` | `"auto"`, `"light"`, or `"dark"` |
+| `center_lat` / `center_lon` | *(unset)* | Fixed map center; defaults to home coordinates |
+| `theme_mode` | `"auto"` | `"auto"`, `"light"`, or `"dark"` |
+| `cluster` | `true` | Cluster nearby markers |
 | `attribution` | `""` | Custom attribution text |
-| `marker.color.default` | `"red"` | Default marker color |
+| `marker.color.default` | `"default"` | Default marker color (named or hex) |
+| `marker.size` | `48` | Marker size in px |
+| `marker.label_mode` | `"initials"` | `"initials"`, `"name"`, `"state"`, or `"icon"` |
 | `marker.popup.title` | `friendly_name` | Popup title template |
 | `marker.popup.body` | `""` | Popup body template |
-| `marker.popup.fields` | `[{label: "State", value: "state"}]` | Popup field list |
+| `marker.popup.fields` | `[]` | Popup field list (`{label, value}`) |
 
-## Marker Colors
+## Requirements
 
-`red`, `orange`, `green`, `blue`, `purple`
+- Home Assistant **2026.8 or newer** (the sidebar panel is sized with viewport units, matching current `ha-panel-custom` behavior).
+
+## Development
+
+```bash
+npm install        # install frontend deps
+npm run build      # build dist/openmap-card.js (commit the result)
+npm run lint       # eslint the frontend sources
+
+python -m pytest tests/   # backend tests (needs pytest-homeassistant-custom-component)
+ruff check custom_components tests
+```
+
+CI runs [hassfest](https://developers.home-assistant.io/docs/creating_integration_manifest/), [HACS validation](https://github.com/hacs/action), ruff, the frontend build (with a freshness check) and pytest on every push and pull request.
 
 ## License
 

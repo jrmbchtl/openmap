@@ -7,62 +7,24 @@
         "data": {
           "title": "Title"
         }
-      },
-      "init": {
-        "title": "Open Map Options",
-        "description": "Configure map appearance and entity sources",
-        "data": {
-          "title": "Title",
-          "default_zoom": "Default Zoom Level",
-          "center_lat": "Map Center Latitude",
-          "center_lon": "Map Center Longitude",
-          "dark_mode": "Dark Mode",
-          "attribution": "Custom Attribution",
-          "entities": "Explicit Entities",
-          "geolocation_sources": "Geolocation Sources",
-          "include_domains": "Include Domains",
-          "marker_color_default": "Default Marker Color",
-          "marker_popup_title": "Popup Title Template",
-          "marker_popup_body": "Popup Body Template"
-        }
-      }
-    },
-    "options": {
-      "step": {
-        "init": {
-          "title": "Open Map Options",
-          "description": "Configure map appearance and entity sources",
-          "data": {
-            "title": "Title",
-            "default_zoom": "Default Zoom Level",
-            "center_lat": "Map Center Latitude",
-            "center_lon": "Map Center Longitude",
-            "dark_mode": "Dark Mode",
-            "attribution": "Custom Attribution",
-            "entities": "Explicit Entities",
-            "geolocation_sources": "Geolocation Sources",
-            "include_domains": "Include Domains",
-            "marker_color_default": "Default Marker Color",
-            "marker_popup_title": "Popup Title Template",
-            "marker_popup_body": "Popup Body Template"
-          }
-        }
       }
     },
     "abort": {
-      "single_instance_allowed": "Only one Open Map configuration is allowed"
+      "already_configured": "Only one Open Map configuration is allowed"
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Open Map Options",
+        "description": "Configure map appearance and entity sources",
         "data": {
           "title": "Title",
           "default_zoom": "Default Zoom Level",
+          "theme_mode": "Theme Mode",
+          "cluster": "Cluster Markers",
           "center_lat": "Map Center Latitude",
           "center_lon": "Map Center Longitude",
-          "dark_mode": "Dark Mode",
           "attribution": "Custom Attribution",
           "entities": "Explicit Entities",
           "geolocation_sources": "Geolocation Sources",
@@ -73,8 +35,5 @@
         }
       }
     }
-  },
-  "entity": {
-    "sensor": {}
   }
 }

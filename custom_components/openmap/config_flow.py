@@ -1,8 +1,14 @@
 """Config flow for Open Map integration."""
 
-import voluptuous as vol
+from typing import Any
+
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant
+from homeassistant.config_entries import (
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+from homeassistant.core import callback
 from homeassistant.helpers.selector import (
     BooleanSelector,
     BooleanSelectorConfig,
@@ -17,6 +23,7 @@ from homeassistant.helpers.selector import (
     TextSelector,
     TextSelectorConfig,
 )
+import voluptuous as vol
 
 from .const import DOMAIN
 
@@ -35,20 +42,28 @@ def _normalize_list(value):
     return []
 
 
-class OpenMapConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class OpenMapConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Open Map."""
 
     VERSION = 1
 
-    async def async_step_user(self, user_input=None):
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Handle the initial step."""
+        # The panel and card are global; a second entry would fight over the
+        # same sidebar panel, so only one instance is allowed.
+        await self.async_set_unique_id(DOMAIN)
+        self._abort_if_unique_id_configured()
+
         if user_input is not None:
             return self.async_create_entry(title="Open Map", data=user_input)
 
         data_schema = vol.Schema(
             {
-                vol.Optional(
-                    "title", default="Open Map"
+                vol.Required(
+                    "title",
+                    default="Open Map",
                 ): TextSelector(TextSelectorConfig()),
             }
         )
@@ -58,34 +73,25 @@ class OpenMapConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     @staticmethod
-    def async_get_options_flow(config_entry):
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> "OpenMapOptionsFlowHandler":
         """Get the options flow for this handler."""
-        return OpenMapOptionsFlowHandler(config_entry)
+        return OpenMapOptionsFlowHandler()
 
 
-class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
-    """Handle options flow for Open Map."""
+class OpenMapOptionsFlowHandler(OptionsFlow):
+    """Handle options flow for Open Map.
 
-    def __init__(self, config_entry):
-        """Initialize options flow, compatible across HA versions.
+    The base class exposes the owning entry as ``self.config_entry`` since
+    2024.11; constructing it with an entry argument is deprecated and rejected
+    in newer releases, so it must not be passed here.
+    """
 
-        The base OptionsFlow initializes internal flow state (flow id, handler,
-        source) in its constructor. Different HA versions accept a config_entry
-        argument or none, so call super() defensively. Skipping super() leaves
-        the flow state uninitialized and makes HA reject the flow with a 400.
-        """
-        try:
-            super().__init__(config_entry)
-        except TypeError:
-            super().__init__()
-        self._config_entry = config_entry
-        self._handler = config_entry.domain
-
-    @property
-    def config_entry(self):
-        return self._config_entry
-
-    async def async_step_init(self, user_input=None):
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Manage the options."""
         if user_input is not None:
             cleaned_input = {}
@@ -95,25 +101,29 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
                 if k in ("geolocation_sources", "include_domains"):
                     cleaned_input[k] = _normalize_list(v)
                 elif k == "marker_color_default":
-                    if "marker" not in cleaned_input:
-                        cleaned_input["marker"] = {}
-                    if "color" not in cleaned_input["marker"]:
-                        cleaned_input["marker"]["color"] = {}
-                    cleaned_input["marker"]["color"]["default"] = v
+                    marker = cleaned_input.setdefault("marker", {})
+                    marker.setdefault("color", {})["default"] = v
+                elif k == "marker_popup_title":
+                    marker = cleaned_input.setdefault("marker", {})
+                    marker.setdefault("popup", {})["title"] = v
+                elif k == "marker_popup_body":
+                    marker = cleaned_input.setdefault("marker", {})
+                    marker.setdefault("popup", {})["body"] = v
                 else:
                     cleaned_input[k] = v
             return self.async_create_entry(title="", data=cleaned_input)
 
         # Merge options with data for backward compatibility fallback.
-        options = {**self.config_entry.data, **self.config_entry.options}
+        entry = self.config_entry
+        options = {**entry.data, **entry.options}
 
         data_schema = vol.Schema(
             {
-                vol.Optional(
+                vol.Required(
                     "title",
                     default=options.get("title", "Open Map"),
                 ): TextSelector(TextSelectorConfig()),
-                vol.Optional(
+                vol.Required(
                     "default_zoom",
                     default=options.get("default_zoom", 14),
                 ): NumberSelector(
@@ -124,7 +134,7 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
                         mode=NumberSelectorMode.BOX,
                     )
                 ),
-                vol.Optional(
+                vol.Required(
                     "theme_mode",
                     default=options.get("theme_mode")
                     or options.get("dark_mode", "auto"),
@@ -134,35 +144,37 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
-                vol.Optional(
+                vol.Required(
                     "cluster",
                     default=options.get("cluster", True),
                 ): BooleanSelector(BooleanSelectorConfig()),
                 vol.Optional(
                     "center_lat",
+                    description={"suggested_value": options.get("center_lat")},
                 ): NumberSelector(
                     NumberSelectorConfig(
                         min=-90,
                         max=90,
-                        step=0.000001,
+                        step=0.001,
                         mode=NumberSelectorMode.BOX,
                     )
                 ),
                 vol.Optional(
                     "center_lon",
+                    description={"suggested_value": options.get("center_lon")},
                 ): NumberSelector(
                     NumberSelectorConfig(
                         min=-180,
                         max=180,
-                        step=0.000001,
+                        step=0.001,
                         mode=NumberSelectorMode.BOX,
                     )
                 ),
-                vol.Optional(
+                vol.Required(
                     "attribution",
                     default=options.get("attribution", ""),
                 ): TextSelector(TextSelectorConfig()),
-                vol.Optional(
+                vol.Required(
                     "entities",
                     default=options.get("entities", []),
                 ): EntitySelector(
@@ -172,14 +184,16 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
                 ),
                 vol.Optional(
                     "geolocation_sources",
-                    default=", ".join(
-                        _normalize_list(
-                            options.get("geolocation_sources")
-                            or options.get("geo_location_sources", [])
+                    description={
+                        "suggested_value": ", ".join(
+                            _normalize_list(
+                                options.get("geolocation_sources")
+                                or options.get("geo_location_sources", [])
+                            )
                         )
-                    ),
+                    },
                 ): TextSelector(TextSelectorConfig()),
-                vol.Optional(
+                vol.Required(
                     "include_domains",
                     default=_normalize_list(options.get("include_domains", [])),
                 ): SelectSelector(
@@ -189,25 +203,31 @@ class OpenMapOptionsFlowHandler(config_entries.OptionsFlow):
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
-                vol.Optional(
+                vol.Required(
                     "marker_color_default",
                     default=options.get("marker_color_default")
-                    or options.get("marker", {}).get("color", {}).get("default", "default"),
+                    or options.get("marker", {})
+                    .get("color", {})
+                    .get("default", "default"),
                 ): SelectSelector(
                     SelectSelectorConfig(
                         options=COLOR_OPTIONS,
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
-                vol.Optional(
+                vol.Required(
                     "marker_popup_title",
                     default=options.get("marker_popup_title")
-                    or options.get("marker", {}).get("popup", {}).get("title", "friendly_name"),
+                    or options.get("marker", {})
+                    .get("popup", {})
+                    .get("title", "friendly_name"),
                 ): TextSelector(TextSelectorConfig()),
-                vol.Optional(
+                vol.Required(
                     "marker_popup_body",
                     default=options.get("marker_popup_body")
-                    or options.get("marker", {}).get("popup", {}).get("body", ""),
+                    or options.get("marker", {})
+                    .get("popup", {})
+                    .get("body", ""),
                 ): TextSelector(TextSelectorConfig()),
             }
         )

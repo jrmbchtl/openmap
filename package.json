@@ -1,13 +1,13 @@
 {
   "name": "openmap-card",
-  "version": "0.2.9",
+  "version": "0.3.0",
   "description": "Open Map Home Assistant integration frontend card",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "rollup -c rollup.config.mjs",
     "watch": "rollup -c rollup.config.mjs --watch",
-    "lint": "eslint src/",
+    "lint": "eslint custom_components/openmap/frontend/src/",
     "prebuild": "npm install"
   },
   "dependencies": {
@@ -19,6 +19,7 @@
     "@rollup/plugin-commonjs": "^25.0.0",
     "@rollup/plugin-node-resolve": "^15.0.0",
     "@rollup/plugin-terser": "^0.4.0",
+    "eslint": "^9.0.0",
     "rollup": "^4.0.0",
     "rollup-plugin-copy": "^3.5.0"
   }

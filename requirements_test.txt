@@ -1,0 +1,5 @@
+# Tests for the Open Map custom integration.
+-c .devcontainer/requirements_base.txt
+colorlog==6.9.0
+pytest-homeassistant-custom-component==0.13.258
+ruff==0.14.5

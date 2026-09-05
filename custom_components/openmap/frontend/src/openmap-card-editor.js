@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 
-const CARD_VERSION = "0.2.9";
+const CARD_VERSION = "0.3.0";
 
 const DOMAIN_OPTIONS = [
   "zone",
@@ -112,8 +112,8 @@ class OpenmapCardEditor extends LitElement {
         .schema=${[
           { name: "title", label: "Title", selector: { text: {} } },
           { name: "default_zoom", label: "Default Zoom", selector: { number: { mode: "box", min: 1, max: 20, step: 1 } } },
-          { name: "center_lat", label: "Map Center Latitude", selector: { number: { mode: "box", min: -90, max: 90, step: 0.000001 } } },
-          { name: "center_lon", label: "Map Center Longitude", selector: { number: { mode: "box", min: -180, max: 180, step: 0.000001 } } },
+          { name: "center_lat", label: "Map Center Latitude", selector: { number: { mode: "box", min: -90, max: 90, step: 0.0001 } } },
+          { name: "center_lon", label: "Map Center Longitude", selector: { number: { mode: "box", min: -180, max: 180, step: 0.0001 } } },
           { name: "theme_mode", label: "Theme Mode", selector: { select: { options: ["auto", "light", "dark"] } } },
           { name: "cluster", label: "Cluster Markers", selector: { boolean: {} } },
           {
@@ -132,17 +132,31 @@ class OpenmapCardEditor extends LitElement {
         <p class="section-hint">
           Select device trackers, persons, zones, or sensors with latitude/longitude attributes.
         </p>
-        <ha-entity-picker
+        <ha-form
           .hass=${this.hass}
-          .value=${(cfg.entities || []).join(",")}
-          .includeDomains=${["device_tracker", "person", "zone", "sensor", "geo_location"]}
-          allow-custom-entity
+          .data=${{ entities: (cfg.entities || []).filter((e) => typeof e === "string") }}
+          .schema=${[
+            {
+              name: "entities",
+              label: "Entities",
+              selector: {
+                entity: {
+                  multiple: true,
+                  filter: [
+                    { domain: ["device_tracker", "person", "zone", "sensor", "geo_location"] },
+                  ],
+                },
+              },
+            },
+          ]}
+          .computeLabel=${(s) => s.label}
           @value-changed=${(e) => {
-            const raw = e.detail?.value || "";
-            this.config = { ...this.config, entities: raw.split(",").map(s => s.trim()).filter(Boolean) };
+            const v = e.detail?.value?.entities;
+            if (!Array.isArray(v)) return;
+            this.config = { ...this.config, entities: v };
             this._emit();
           }}
-        ></ha-entity-picker>
+        ></ha-form>
       </div>
 
       <div class="section">
@@ -150,16 +164,30 @@ class OpenmapCardEditor extends LitElement {
         <p class="section-hint">
           Include all geo_location entities matching these sources (e.g. gpslogger, icloud).
         </p>
-        <ha-entity-picker
+        <ha-form
           .hass=${this.hass}
-          .value=${(cfg.geo_location_sources || cfg.geolocation_sources || []).join(",")}
-          .includeDomains=${["geo_location"]}
+          .data=${{ geo_location_sources: (cfg.geo_location_sources || cfg.geolocation_sources || []) }}
+          .schema=${[
+            {
+              name: "geo_location_sources",
+              label: "Geolocation Sources",
+              selector: {
+                entity: {
+                  multiple: true,
+                  filter: [{ domain: "geo_location" }],
+                },
+              },
+            },
+          ]}
+          .computeLabel=${(s) => s.label}
           @value-changed=${(e) => {
-            const raw = e.detail?.value || "";
-            this.config = { ...this.config, geo_location_sources: raw.split(",").map(s => s.trim()).filter(Boolean) };
+            const v = e.detail?.value?.geo_location_sources;
+            if (!Array.isArray(v)) return;
+            const sources = [...new Set(v.map((id) => id.replace(/^geo_location\./, "")))];
+            this.config = { ...this.config, geo_location_sources: sources };
             this._emit();
           }}
-        ></ha-entity-picker>
+        ></ha-form>
       </div>
 
       <div class="section">
