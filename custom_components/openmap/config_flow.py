@@ -76,7 +76,7 @@ class OpenMapConfigFlow(ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
-    ) -> "OpenMapOptionsFlowHandler":
+    ) -> OpenMapOptionsFlowHandler:
         """Get the options flow for this handler."""
         return OpenMapOptionsFlowHandler()
 
