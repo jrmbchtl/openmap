@@ -245,6 +245,54 @@ async def test_options_flow_marker_color_default_is_valid_choice(
     assert result["type"] == FlowResultType.CREATE_ENTRY
 
 
+async def test_options_flow_frontend_submit_gate(
+    hass: HomeAssistant, mock_config_entry
+) -> None:
+    """No required field may appear empty after UI prefill.
+
+    The HA frontend blocks submit (silently, dialog never closes) when any
+    required field is "" or undefined. Required-with-empty-default fields
+    like attribution/marker_popup_body used to trigger exactly that, which
+    made the whole options dialog un-submittable.
+    """
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(
+        mock_config_entry.entry_id
+    )
+    assert result["type"] == FlowResultType.FORM
+
+    from homeassistant.helpers.data_entry_flow import FlowManagerResourceView
+
+    view = FlowManagerResourceView(hass.config_entries.options)
+    fields = view._prepare_result_json(dict(result))["data_schema"]
+
+    # Port of computeInitialHaFormData: suggested_value, else default.
+    ui_data = {}
+    for field in fields:
+        description = field.get("description") or {}
+        if description.get("suggested_value") is not None:
+            ui_data[field["name"]] = description["suggested_value"]
+        elif "default" in field and field["default"] is not None:
+            ui_data[field["name"]] = field["default"]
+
+    blockers = [
+        field["name"]
+        for field in fields
+        if field.get("required") and ui_data.get(field["name"]) in ("", None)
+    ]
+    assert blockers == [], f"required fields empty after prefill: {blockers}"
+
+    # And the form the UI would actually send must validate server-side.
+    payload = {k: v for k, v in ui_data.items() if v not in ("", None)}
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=payload
+    )
+    await hass.async_block_till_done()
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+
+
 async def test_options_flow_no_legacy_entry_arg(
     hass: HomeAssistant, mock_config_entry
 ) -> None:

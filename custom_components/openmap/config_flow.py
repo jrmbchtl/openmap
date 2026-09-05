@@ -186,9 +186,9 @@ class OpenMapOptionsFlowHandler(OptionsFlow):
                         mode=NumberSelectorMode.BOX,
                     )
                 ),
-                vol.Required(
+                vol.Optional(
                     "attribution",
-                    default=options.get("attribution", ""),
+                    description={"suggested_value": options.get("attribution", "")},
                 ): TextSelector(TextSelectorConfig()),
                 vol.Optional(
                     "carto_api_key",
@@ -237,19 +237,23 @@ class OpenMapOptionsFlowHandler(OptionsFlow):
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
-                vol.Required(
+                vol.Optional(
                     "marker_popup_title",
-                    default=options.get("marker_popup_title")
-                    or options.get("marker", {})
-                    .get("popup", {})
-                    .get("title", "friendly_name"),
+                    description={
+                        "suggested_value": options.get("marker_popup_title")
+                        or options.get("marker", {})
+                        .get("popup", {})
+                        .get("title", "friendly_name")
+                    },
                 ): TextSelector(TextSelectorConfig()),
-                vol.Required(
+                vol.Optional(
                     "marker_popup_body",
-                    default=options.get("marker_popup_body")
-                    or options.get("marker", {})
-                    .get("popup", {})
-                    .get("body", ""),
+                    description={
+                        "suggested_value": options.get("marker_popup_body")
+                        or options.get("marker", {})
+                        .get("popup", {})
+                        .get("body", "")
+                    },
                 ): TextSelector(TextSelectorConfig()),
             }
         )
