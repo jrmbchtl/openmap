@@ -138,6 +138,113 @@ async def test_options_flow_persists_empty_lists(
     assert mock_config_entry.options["entities"] == []
 
 
+async def test_options_flow_preserves_blank_fields(
+    hass: HomeAssistant, mock_config_entry
+) -> None:
+    """Blank/omitted fields must not wipe previously saved options.
+
+    The frontend omits untouched password fields, and async_create_entry
+    replaces the whole options dict; without merging, a submit that does
+    not include the CARTO key would silently delete it.
+    """
+    hass.config_entries.async_update_entry(
+        mock_config_entry,
+        options={"carto_api_key": "keep-me", "include_domains": ["zone"]},
+    )
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(
+        mock_config_entry.entry_id
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={
+            "title": "Open Map",
+            "default_zoom": 14,
+            "theme_mode": "auto",
+            "cluster": True,
+            "attribution": "",
+            "entities": [],
+            "include_domains": [],
+            # carto_api_key deliberately omitted (blank password field)
+            "marker_color_default": "default",
+            "marker_popup_title": "friendly_name",
+            "marker_popup_body": "",
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert mock_config_entry.options["carto_api_key"] == "keep-me"
+
+
+async def test_options_flow_clearing_key_removes_it(
+    hass: HomeAssistant, mock_config_entry
+) -> None:
+    """Explicitly emptying the key field clears the stored key."""
+    hass.config_entries.async_update_entry(
+        mock_config_entry, options={"carto_api_key": "existing-key"}
+    )
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(
+        mock_config_entry.entry_id
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={
+            "title": "Open Map",
+            "default_zoom": 14,
+            "theme_mode": "auto",
+            "cluster": True,
+            "attribution": "",
+            "entities": [],
+            "include_domains": [],
+            "carto_api_key": "",  # user emptied the field
+            "marker_color_default": "default",
+            "marker_popup_title": "friendly_name",
+            "marker_popup_body": "",
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert "carto_api_key" not in mock_config_entry.options
+
+
+async def test_options_flow_marker_color_default_is_valid_choice(
+    hass: HomeAssistant, mock_config_entry
+) -> None:
+    """The untouched form must submit cleanly (regression: invalid default).
+
+    The marker color select defaulted to "default" while only offering
+    named colors, so submitting the untouched form failed schema
+    validation and the dialog never closed.
+    """
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(
+        mock_config_entry.entry_id
+    )
+    # Submit exactly what the frontend sends for an untouched form.
+    untouched = result["data_schema"]({})
+    assert untouched["marker_color_default"] in [
+        "default",
+        "red",
+        "orange",
+        "green",
+        "blue",
+        "purple",
+    ]
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=untouched
+    )
+    await hass.async_block_till_done()
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+
+
 async def test_options_flow_no_legacy_entry_arg(
     hass: HomeAssistant, mock_config_entry
 ) -> None:

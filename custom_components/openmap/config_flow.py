@@ -29,7 +29,9 @@ import voluptuous as vol
 from .const import DOMAIN
 
 DOMAIN_OPTIONS = ["zone", "device_tracker", "person", "sensor", "geo_location"]
-COLOR_OPTIONS = ["red", "orange", "green", "blue", "purple"]
+# "default" renders the marker in the theme accent color; the rest are
+# fixed marker colors.
+COLOR_OPTIONS = ["default", "red", "orange", "green", "blue", "purple"]
 
 
 def _normalize_list(value):
@@ -95,9 +97,18 @@ class OpenMapOptionsFlowHandler(OptionsFlow):
     ) -> ConfigFlowResult:
         """Manage the options."""
         if user_input is not None:
+            # Blank fields are dropped, NOT deleted from the saved options:
+            # async_create_entry replaces the whole options dict, so a form
+            # the frontend submits without a blanked password field would
+            # otherwise wipe previously stored values (e.g. the CARTO key).
+            previous = dict(self.config_entry.options)
+            secret_fields = ("carto_api_key",)
             cleaned_input = {}
             for k, v in user_input.items():
                 if v is None or v == "":
+                    if k in secret_fields and k in previous:
+                        # An explicitly emptied secret clears the stored one.
+                        previous.pop(k, None)
                     continue
                 if k in ("geolocation_sources", "include_domains"):
                     cleaned_input[k] = _normalize_list(v)
@@ -112,11 +123,15 @@ class OpenMapOptionsFlowHandler(OptionsFlow):
                     marker.setdefault("popup", {})["body"] = v
                 else:
                     cleaned_input[k] = v
-            return self.async_create_entry(title="", data=cleaned_input)
+            return self.async_create_entry(title="", data={**previous, **cleaned_input})
 
         # Merge options with data for backward compatibility fallback.
         entry = self.config_entry
         options = {**entry.data, **entry.options}
+        stored_color = (
+            options.get("marker_color_default")
+            or options.get("marker", {}).get("color", {}).get("default")
+        )
 
         data_schema = vol.Schema(
             {
@@ -210,10 +225,12 @@ class OpenMapOptionsFlowHandler(OptionsFlow):
                 ),
                 vol.Required(
                     "marker_color_default",
-                    default=options.get("marker_color_default")
-                    or options.get("marker", {})
-                    .get("color", {})
-                    .get("default", "default"),
+                    # A custom hex color saved from the card editor is not a
+                    # select option; fall back to the theme-accent default
+                    # instead of offering an invalid choice.
+                    default=stored_color
+                    if stored_color in COLOR_OPTIONS
+                    else "default",
                 ): SelectSelector(
                     SelectSelectorConfig(
                         options=COLOR_OPTIONS,
