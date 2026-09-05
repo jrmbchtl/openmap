@@ -17,11 +17,16 @@ from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.loader import async_get_integration
 
 from .const import DOMAIN
+from .http import async_register_http_views
 
 _LOGGER = logging.getLogger(__name__)
 
 PANEL_URL_PATH = "openmap"
 WEBCOMPONENT_NAME = "openmap-card"
+
+# hass.data key tracking static paths already registered this run; separate
+# from the DOMAIN dict so entry unload/reload cannot reset it.
+_REGISTERED_STATIC_PATHS = f"{DOMAIN}_registered_static_paths"
 
 # Defaults for the sidebar panel card. The options flow writes to
 # config_entry.options, which is merged over these defaults so the
@@ -118,10 +123,10 @@ async def _async_register_static_path(hass: HomeAssistant) -> str:
 
     # The versioned URL can only change across a restart (it comes from the
     # installed manifest), and re-registering would stack duplicate aiohttp
-    # routes on every entry reload, so register once per HA run.
-    registered: set[str] = hass.data.setdefault(DOMAIN, {}).setdefault(
-        "static_paths", set()
-    )
+    # routes on every entry reload, so register once per HA run. The flag
+    # lives OUTSIDE hass.data[DOMAIN] because unloading the last entry pops
+    # that dict, and a subsequent reload would re-register otherwise.
+    registered: set[str] = hass.data.setdefault(_REGISTERED_STATIC_PATHS, set())
     if url in registered:
         return url
 
@@ -157,6 +162,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     url = await _async_register_static_path(hass)
     _async_add_extra_js(hass, url)
+    async_register_http_views(hass)
     await _async_register_panel(hass, entry)
 
     domain_data.setdefault("entries", {})[entry.entry_id] = entry

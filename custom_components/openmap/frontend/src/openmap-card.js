@@ -3,7 +3,7 @@ import L from "./leaflet-shim.js";
 import "leaflet.markercluster";
 import "./openmap-card-editor.js";
 
-const CARD_VERSION = "0.3.1";
+const CARD_VERSION = "0.3.2";
 
 // Debug logging: opt-in via ?debug=1, ?openmap_debug=1, or
 // localStorage["openmap_debug"] = "1".
@@ -43,8 +43,11 @@ if (typeof window !== "undefined") {
 
 // Match Home Assistant's built-in map card: CARTO Voyager tiles in both
 // light and dark mode (dark mode is applied via a CSS filter, not a
-// separate tile layer).
-const MAP_URL = "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
+// separate tile layer). Since 2025/2026 CARTO raster tiles require a free
+// API key (https://carto.com/basemaps/apikey); keyless requests still work
+// but are stamped with an "API key required" watermark.
+const TILE_URL_TEMPLATE =
+  "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
 const MAP_ATTR =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, &copy; <a href="https://carto.com/attributions">CARTO</a>';
 const MAP_OPTIONS = {
@@ -52,6 +55,52 @@ const MAP_OPTIONS = {
   minZoom: 0,
   maxZoom: 20,
   referrerPolicy: "origin",
+};
+
+// Endpoint serving the key configured in the integration's options flow.
+const BASEMAP_KEY_URL = "/api/openmap/basemap_key";
+
+// Shared per page load: the key is integration-level, so every card and the
+// sidebar panel resolve it once. A rejected/empty lookup is not cached so a
+// later retry (e.g. after the user saved the key) succeeds.
+let _basemapKeyPromise = null;
+
+/**
+ * Resolve the integration-wide CARTO key through hass.fetchWithAuth.
+ * Cards cannot read config entries from the frontend (those websocket
+ * commands are admin-only), so the integration exposes the key on an
+ * authenticated HTTP endpoint. The key is a client-side tile key by design:
+ * the browser must include it in every tile request.
+ */
+const fetchSharedBasemapKey = (hass) => {
+  if (_basemapKeyPromise) return _basemapKeyPromise;
+  if (!hass?.fetchWithAuth) return Promise.resolve(null);
+  _basemapKeyPromise = (async () => {
+    try {
+      const response = await hass.fetchWithAuth(BASEMAP_KEY_URL);
+      if (!response.ok) return null;
+      const data = await response.json();
+      return typeof data?.carto_api_key === "string" && data.carto_api_key
+        ? data.carto_api_key
+        : null;
+    } catch (e) {
+      _dlog("tilekey", "basemap key lookup failed", e);
+      _basemapKeyPromise = null; // allow retry on next render
+      return null;
+    }
+  })();
+  return _basemapKeyPromise;
+};
+
+/**
+ * Build the tile URL for the given key. Keys ride along as a `key` query
+ * parameter (CARTO's documented pattern); without a key the plain URL is
+ * returned so the map keeps working, just watermarked.
+ */
+const getTileUrl = (apiKey) => {
+  if (!apiKey) return TILE_URL_TEMPLATE;
+  const separator = TILE_URL_TEMPLATE.includes("?") ? "&" : "?";
+  return `${TILE_URL_TEMPLATE}${separator}key=${encodeURIComponent(apiKey)}`;
 };
 
 const DEFAULT_CENTER = [48.8, 9.2];
@@ -182,6 +231,8 @@ class OpenmapCard extends LitElement {
     this._circleLayer = null;
     this._pendingRender = false;
     this._tileLayer = null;
+    this._tileApiKey = null;
+    this._tileApiKeyResolved = false;
     this._isPanel = false;
     this._ready = false;
     this._connected = false;
@@ -609,7 +660,31 @@ class OpenmapCard extends LitElement {
   _addTileLayer() {
     if (!this._map) return;
     if (this._tileLayer) this._map.removeLayer(this._tileLayer);
-    this._tileLayer = L.tileLayer(MAP_URL, {
+    // Explicit config wins; otherwise ask the integration for its shared
+    // key. Resolution is async, so the layer starts keyless (map still
+    // works, watermarked) and is rebuilt once a key arrives.
+    const explicitKey = this.config?.carto_api_key;
+    if (explicitKey) {
+      this._tileApiKey = explicitKey;
+      this._addTileLayerWithKey(explicitKey);
+      return;
+    }
+    this._addTileLayerWithKey(null);
+    if (this._tileApiKeyResolved) return;
+    fetchSharedBasemapKey(this.hass).then((key) => {
+      this._tileApiKeyResolved = true;
+      if (key && key !== this._tileApiKey && this._map) {
+        _dlog("tilekey", "applying shared basemap key");
+        this._addTileLayerWithKey(key);
+      }
+    });
+  }
+
+  _addTileLayerWithKey(apiKey) {
+    if (!this._map) return;
+    if (this._tileLayer) this._map.removeLayer(this._tileLayer);
+    this._tileApiKey = apiKey || null;
+    this._tileLayer = L.tileLayer(getTileUrl(apiKey), {
       ...MAP_OPTIONS,
       attribution: MAP_ATTR,
     }).addTo(this._map);

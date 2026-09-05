@@ -26,7 +26,11 @@ async def test_diagnostics_redacts_location(
     hass.config_entries.async_update_entry(
         mock_config_entry,
         data={"title": "Open Map", "center_lat": 48.8, "center_lon": 9.2},
-        options={"entities": ["person.home"], "center": [48.8, 9.2]},
+        options={
+            "entities": ["person.home"],
+            "center": [48.8, 9.2],
+            "carto_api_key": "supersecret",
+        },
     )
     await hass.async_block_till_done()
 
@@ -37,6 +41,8 @@ async def test_diagnostics_redacts_location(
     assert entry["data"]["title"] == "Open Map"
     assert entry["options"]["center"] == REDACTED
     assert entry["options"]["entities"] == ["person.home"]
+    # The API key is a secret and must never leak into diagnostics.
+    assert entry["options"]["carto_api_key"] == REDACTED
 
 
 async def test_diagnostics_is_registered(hass: HomeAssistant) -> None:
@@ -55,6 +61,7 @@ async def test_diagnostics_is_registered(hass: HomeAssistant) -> None:
 async def test_redact_helper_matches_expected_keys() -> None:
     """The redaction list covers the documented location keys."""
     data = {
+        "carto_api_key": "k",
         "latitude": 1.0,
         "longitude": 2.0,
         "elevation": 3.0,

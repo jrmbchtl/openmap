@@ -99,12 +99,26 @@ marker:
 | `theme_mode` | `"auto"` | `"auto"`, `"light"`, or `"dark"` |
 | `cluster` | `true` | Cluster nearby markers |
 | `attribution` | `""` | Custom attribution text |
+| `carto_api_key` | *(unset)* | CARTO basemap API key (see below) |
 | `marker.color.default` | `"default"` | Default marker color (named or hex) |
 | `marker.size` | `48` | Marker size in px |
 | `marker.label_mode` | `"initials"` | `"initials"`, `"name"`, `"state"`, or `"icon"` |
 | `marker.popup.title` | `friendly_name` | Popup title template |
 | `marker.popup.body` | `""` | Popup body template |
 | `marker.popup.fields` | `[]` | Popup field list (`{label, value}`) |
+
+## CARTO API Key
+
+CARTO requires an **API key** for its raster basemap tiles. Without a key the map still works, but tiles are stamped with a repeated **"API key required"** watermark.
+
+To remove the watermark:
+
+1. Request a free key at [carto.com/basemaps/apikey](https://carto.com/basemaps/apikey) — no CARTO account needed, free up to 5 million tile requests per calendar month.
+2. Open **Settings → Devices & Services → Open Map → Configure** and paste the key into **CARTO API Key**.
+
+The key is shared by the sidebar panel and all Open Map cards (it is a client-side tile key by design — the browser sends it with every tile request). Attribution for OpenStreetMap and CARTO must stay visible; the card keeps it enabled.
+
+> CARTO is retiring raster tiles long-term in favor of vector basemaps. When that happens this card will need to migrate to MapLibre — until then, raster + key keeps working.
 
 ## Requirements
 

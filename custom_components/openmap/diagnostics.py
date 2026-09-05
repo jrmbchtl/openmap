@@ -7,6 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 TO_REDACT = {
+    "carto_api_key",
     "latitude",
     "longitude",
     "elevation",

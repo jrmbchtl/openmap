@@ -71,6 +71,7 @@ async def test_options_flow_round_trip(
             "theme_mode": "dark",
             "cluster": False,
             "attribution": "© me",
+            "carto_api_key": "my-carto-key",
             "entities": ["person.home"],
             "geolocation_sources": "gpslogger, icloud",
             "include_domains": ["zone", "device_tracker"],
@@ -87,6 +88,7 @@ async def test_options_flow_round_trip(
     assert options["default_zoom"] == 10
     assert options["theme_mode"] == "dark"
     assert options["cluster"] is False
+    assert options["carto_api_key"] == "my-carto-key"
     assert options["entities"] == ["person.home"]
     # Comma-separated text input is normalized into a clean list.
     assert options["geolocation_sources"] == ["gpslogger", "icloud"]

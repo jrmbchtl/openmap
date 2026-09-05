@@ -26,6 +26,7 @@
           "center_lat": "Map Center Latitude",
           "center_lon": "Map Center Longitude",
           "attribution": "Custom Attribution",
+          "carto_api_key": "CARTO API Key",
           "entities": "Explicit Entities",
           "geolocation_sources": "Geolocation Sources",
           "include_domains": "Include Domains",

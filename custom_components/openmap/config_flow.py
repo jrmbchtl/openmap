@@ -22,6 +22,7 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
+    TextSelectorType,
 )
 import voluptuous as vol
 
@@ -174,6 +175,10 @@ class OpenMapOptionsFlowHandler(OptionsFlow):
                     "attribution",
                     default=options.get("attribution", ""),
                 ): TextSelector(TextSelectorConfig()),
+                vol.Optional(
+                    "carto_api_key",
+                    description={"suggested_value": options.get("carto_api_key")},
+                ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
                 vol.Required(
                     "entities",
                     default=options.get("entities", []),
