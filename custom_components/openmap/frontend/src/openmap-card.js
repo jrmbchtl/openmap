@@ -3,7 +3,7 @@ import L from "./leaflet-shim.js";
 import "leaflet.markercluster";
 import "./openmap-card-editor.js";
 
-const CARD_VERSION = "0.3.5";
+const CARD_VERSION = "0.3.6";
 
 // Debug logging: opt-in via ?debug=1, ?openmap_debug=1, or
 // localStorage["openmap_debug"] = "1".
@@ -995,7 +995,8 @@ class OpenmapCard extends LitElement {
       // Fullscreen panel: app bar keeps the hamburger visible on mobile so
       // the sidebar drawer can be opened (the only way out of the panel).
       // Mirrors HA's own map panel; hamburger fires "hass-toggle-menu",
-      // which home-assistant-main handles. Controls live in the bar.
+      // which home-assistant-main handles. Cluster/reset float below the
+      // Leaflet zoom control, like HA's card-side buttons.
       return html`
         <div class="om-panel">
           <header class="om-appbar">
@@ -1011,27 +1012,8 @@ class OpenmapCard extends LitElement {
                 `
               : nothing}
             <span class="om-appbar-title">${cfg.title || "Open Map"}</span>
-            <div class="om-appbar-actions">
-              ${entityCount > 1
-                ? html`
-                    <ha-icon-button
-                      label="Toggle grouping"
-                      @click=${this._toggleCluster}
-                    >
-                      <ha-icon
-                        icon=${this.config.cluster !== false
-                          ? "mdi:google-circles-communities"
-                          : "mdi:dots-hexagon"}
-                      ></ha-icon>
-                    </ha-icon-button>
-                  `
-                : nothing}
-              <ha-icon-button label="Reset focus" @click=${this._fitToFocus}>
-                <ha-icon icon="mdi:image-filter-center-focus"></ha-icon>
-              </ha-icon-button>
-            </div>
           </header>
-          <div id="root"></div>
+          <div id="root">${controls}</div>
         </div>
       `;
     }
@@ -1099,11 +1081,6 @@ class OpenmapCard extends LitElement {
       white-space: nowrap;
       font-size: var(--ha-font-size-xl, 20px);
       padding-inline-start: 8px;
-    }
-    .om-appbar-actions {
-      display: flex;
-      align-items: center;
-      flex: none;
     }
     .om-appbar ha-icon-button {
       color: inherit;
@@ -1192,34 +1169,36 @@ class OpenmapCard extends LitElement {
     }
     #map .leaflet-control-attribution a { text-decoration: none; color: #0078A8; }
     #map .leaflet-control-attribution a:hover { text-decoration: underline; }
+    /* Zoom bar styled like HA's map: Leaflet-default 26px links with a
+       semi-transparent border and rounded corners on the control. */
+    #map .leaflet-control-zoom {
+      border: 1px solid rgba(0, 0, 0, 0.2);
+      border-radius: 4px;
+    }
     #map .leaflet-control-zoom a {
       background-color: rgba(255, 255, 255, 0.85);
       border-bottom: 1px solid #ccc;
-      width: 22px;
-      height: 22px;
-      line-height: 22px;
+      width: 26px;
+      height: 26px;
+      line-height: 26px;
       display: block;
       text-align: center;
       text-decoration: none;
       color: black;
-      font: bold 18px "Helvetica Neue", Arial, Helvetica, sans-serif;
+      font: bold 19px "Helvetica Neue", Arial, Helvetica, sans-serif;
     }
     #map .leaflet-control-zoom a:hover { background-color: #fff; }
-    /* Square corners on the side control; rounding is applied by the card
-       container (#map) so only the dashboard element shows rounded corners. */
-    #map .leaflet-control-zoom a:first-child,
-    #map .leaflet-control-zoom a:last-child {
-      border-radius: 0;
-    }
     #map .leaflet-control-zoom a:last-child {
       border-bottom: none;
     }
     #map.panel {
       border-radius: 0;
     }
+    /* Floating side buttons (panel: below the zoom control; card: below the
+       zoom control as well, offset for the same 26px links). */
     #buttons {
       position: absolute;
-      top: 75px;
+      top: 76px;
       left: 3px;
       display: flex;
       flex-direction: column;
