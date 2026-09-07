@@ -1195,11 +1195,14 @@ class OpenmapCard extends LitElement {
       border-radius: 0;
     }
     /* Floating side buttons (panel: below the zoom control; card: below the
-       zoom control as well, offset for the same 26px links). */
+       zoom control as well). Zoom bar: 28px wide at Leaflet's 10px margin →
+       center at 24px; a 32px button centers there with left = 8px. Bar
+       bottom sits at 64px (10px margin + two 26px links + border), so
+       top = 68px keeps the same 4px gap used between buttons. */
     #buttons {
       position: absolute;
-      top: 76px;
-      left: 3px;
+      top: 68px;
+      left: 8px;
       display: flex;
       flex-direction: column;
       gap: 4px;
