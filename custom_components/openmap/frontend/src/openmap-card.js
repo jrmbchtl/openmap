@@ -3,7 +3,7 @@ import L from "./leaflet-shim.js";
 import "leaflet.markercluster";
 import "./openmap-card-editor.js";
 
-const CARD_VERSION = "0.3.4";
+const CARD_VERSION = "0.3.5";
 
 // Debug logging: opt-in via ?debug=1, ?openmap_debug=1, or
 // localStorage["openmap_debug"] = "1".
@@ -195,6 +195,7 @@ class OpenmapCard extends LitElement {
     config: { type: Object },
     layout: { type: String, reflect: true },
     _isPreview: { state: true },
+    _narrow: { state: true },
   };
 
   static getConfigElement() {
@@ -234,6 +235,7 @@ class OpenmapCard extends LitElement {
     this._tileApiKey = null;
     this._tileApiKeyResolved = false;
     this._isPanel = false;
+    this._narrow = false;
     this._ready = false;
     this._connected = false;
     this._isPreview = false;
@@ -311,7 +313,14 @@ class OpenmapCard extends LitElement {
     this._tryInit();
   }
 
-  set narrow(val) {}
+  set narrow(val) {
+    // HA sets this on custom panel elements (set-custom-panel-properties).
+    // On narrow viewports the sidebar is a hidden overlay drawer, so the
+    // panel must keep a hamburger visible to open it (and exit the map).
+    this._narrow = Boolean(val);
+    // Viewport flips can resize the bar; keep Leaflet in sync.
+    if (this._map) this._invalidateDebounced();
+  }
   set route(val) {}
 
   getCardSize() {
@@ -983,8 +992,48 @@ class OpenmapCard extends LitElement {
       </div>
     `;
     if (isPanel) {
-      // Fullscreen panel: no card frame, no rounded corners.
-      return html`<div id="root">${controls}</div>`;
+      // Fullscreen panel: app bar keeps the hamburger visible on mobile so
+      // the sidebar drawer can be opened (the only way out of the panel).
+      // Mirrors HA's own map panel; hamburger fires "hass-toggle-menu",
+      // which home-assistant-main handles. Controls live in the bar.
+      return html`
+        <div class="om-panel">
+          <header class="om-appbar">
+            ${this._narrow
+              ? html`
+                  <ha-icon-button
+                    class="om-menu-btn"
+                    label="Toggle sidebar"
+                    @click=${this._toggleSidebar}
+                  >
+                    <ha-icon icon="mdi:menu"></ha-icon>
+                  </ha-icon-button>
+                `
+              : nothing}
+            <span class="om-appbar-title">${cfg.title || "Open Map"}</span>
+            <div class="om-appbar-actions">
+              ${entityCount > 1
+                ? html`
+                    <ha-icon-button
+                      label="Toggle grouping"
+                      @click=${this._toggleCluster}
+                    >
+                      <ha-icon
+                        icon=${this.config.cluster !== false
+                          ? "mdi:google-circles-communities"
+                          : "mdi:dots-hexagon"}
+                      ></ha-icon>
+                    </ha-icon-button>
+                  `
+                : nothing}
+              <ha-icon-button label="Reset focus" @click=${this._fitToFocus}>
+                <ha-icon icon="mdi:image-filter-center-focus"></ha-icon>
+              </ha-icon-button>
+            </div>
+          </header>
+          <div id="root"></div>
+        </div>
+      `;
     }
     return html`
       <ha-card>
@@ -993,6 +1042,14 @@ class OpenmapCard extends LitElement {
         ${cfg.attribution ? html`<div class="om-att">${cfg.attribution}</div>` : nothing}
       </ha-card>
     `;
+  }
+
+  _toggleSidebar() {
+    // Same mechanism as HA's ha-menu-button; handled by home-assistant-main
+    // to open the sidebar drawer on narrow viewports.
+    this.dispatchEvent(
+      new Event("hass-toggle-menu", { bubbles: true, composed: true })
+    );
   }
 
   static styles = css`
@@ -1004,12 +1061,53 @@ class OpenmapCard extends LitElement {
     }
     /* Panel mode: size to the viewport instead of the host chain. The panel
        is registered with handle_safe_area so we apply the insets ourselves
-       (ha-panel-custom's own safe-area padding would double them). */
+       (ha-panel-custom's own safe-area padding would double them). The app
+       bar takes the top inset itself, matching HA's ha-top-app-bar-fixed. */
     :host(.panel-mode) {
       height: 100vh;
       height: 100dvh;
-      padding: var(--safe-area-inset-top, 0px) var(--safe-area-inset-right, 0px)
-        var(--safe-area-inset-bottom, 0px) var(--safe-area-inset-left, 0px);
+    }
+    .om-panel {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+    }
+    .om-appbar {
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      width: 100%;
+      height: var(--header-height, 56px);
+      flex: none;
+      padding-top: var(--safe-area-inset-top, 0px);
+      padding-left: var(--safe-area-inset-left, 0px);
+      padding-right: var(--safe-area-inset-right, 0px);
+      color: var(--app-header-text-color, var(--text-primary-color, #fff));
+      background-color: var(
+        --app-header-background-color,
+        var(--primary-color)
+      );
+      z-index: 4;
+    }
+    .om-appbar-title {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: var(--ha-font-size-xl, 20px);
+      padding-inline-start: 8px;
+    }
+    .om-appbar-actions {
+      display: flex;
+      align-items: center;
+      flex: none;
+    }
+    .om-appbar ha-icon-button {
+      color: inherit;
+      --mdc-icon-size: 24px;
     }
     ha-card {
       width: 100%;
@@ -1026,6 +1124,12 @@ class OpenmapCard extends LitElement {
       /* Never render a zero-height (blank/black) card if a host layout
          collapses: Leaflet refuses to init below these bounds. */
       min-height: 200px;
+    }
+    /* Panel: root fills the space below the app bar and keeps the bottom
+       inset clear (the bar owns the top inset). */
+    .om-panel #root {
+      height: auto;
+      padding-bottom: var(--safe-area-inset-bottom, 0px);
     }
     #map {
       position: absolute;
