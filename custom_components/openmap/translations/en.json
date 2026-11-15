@@ -3,9 +3,13 @@
     "step": {
       "user": {
         "title": "Open Map",
-        "description": "Configure the Open Map integration",
+        "description": "Choose entities, Ludwigsburg traffic layers, or both. Nothing is selected automatically. You can leave the map empty and configure it later.",
         "data": {
-          "title": "Title"
+          "title": "Title",
+          "entities": "Individual entities",
+          "overlay_layers": "Traffic layers (initially hidden)",
+          "include_domains": "Include entire domains",
+          "geo_location_sources": "Geo-location sources (comma-separated)"
         }
       }
     },
@@ -17,7 +21,7 @@
     "step": {
       "init": {
         "title": "Open Map Options",
-        "description": "Configure map appearance and entity sources",
+        "description": "Choose map content and appearance. An untouched password retains the current key; use Clear CARTO key to remove it. Use Automatic center to remove a saved center. Traffic visibility is remembered per browser, not in shared settings.",
         "data": {
           "title": "Title",
           "default_zoom": "Default Zoom Level",
@@ -28,13 +32,22 @@
           "attribution": "Custom Attribution",
           "carto_api_key": "CARTO API Key",
           "entities": "Explicit Entities",
-          "geolocation_sources": "Geolocation Sources",
+          "geo_location_sources": "Geo-location sources (comma-separated)",
+          "overlay_layers": "Traffic layers (initially hidden for newly added layers)",
+          "basemap": "Basemap",
+          "clear_center": "Use automatic center",
+          "clear_carto_key": "Clear CARTO key",
           "include_domains": "Include Domains",
           "marker_color_default": "Default Marker Color",
           "marker_popup_title": "Popup Title Template",
           "marker_popup_body": "Popup Body Template"
         }
       }
+    },
+    "error": {
+      "invalid_center": "Set valid latitude and longitude together, or use automatic center.",
+      "invalid_theme": "Choose auto, light or dark.",
+      "invalid_basemap": "Choose osm or carto."
     }
   }
 }

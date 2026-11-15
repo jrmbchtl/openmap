@@ -7,19 +7,44 @@ from unittest.mock import patch
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.openmap import (
     DEFAULT_PANEL_CONFIG,
     PANEL_URL_PATH,
+    _async_register_static_path,
     _panel_config_from_entry,
 )
 from custom_components.openmap.const import DOMAIN
 
 
-async def test_setup_registers_panel(
-    hass: HomeAssistant, mock_config_entry
+async def test_static_directory_includes_lazy_chunks_and_survives_reload(
+    hass: HomeAssistant, mock_config_entry, mock_built_card
 ) -> None:
+    """Register the versioned directory once, not only the entry script."""
+    from unittest.mock import AsyncMock
+
+    with (
+        patch(
+            "custom_components.openmap._async_integration_version", return_value="1.0.0"
+        ),
+        patch.object(
+            type(hass.http), "async_register_static_paths", new_callable=AsyncMock
+        ) as register,
+    ):
+        url = await _async_register_static_path(hass)
+        assert url == "/openmap/static/v1.0.0/openmap-card.js"
+        config = register.call_args.args[0][0]
+        assert config.url_path == "/openmap/static/v1.0.0"
+        assert config.path == str(mock_built_card.parent)
+        assert config.cache_headers is True
+        assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+        assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        register.assert_awaited_once()
+
+
+async def test_setup_registers_panel(hass: HomeAssistant, mock_config_entry) -> None:
     """Setting up the entry registers the sidebar panel."""
     assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -49,9 +74,7 @@ async def test_setup_missing_bundle_not_ready(
         "custom_components.openmap._async_integration_version",
         return_value="0.3.0",
     ):
-        assert not await hass.config_entries.async_setup(
-            mock_config_entry.entry_id
-        )
+        assert not await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
     assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
 
@@ -75,9 +98,7 @@ async def test_options_update_reloads_without_error(
     assert panel.config["default_zoom"] == 8
 
 
-async def test_unload_removes_panel(
-    hass: HomeAssistant, mock_config_entry
-) -> None:
+async def test_unload_removes_panel(hass: HomeAssistant, mock_config_entry) -> None:
     """Unloading the last entry removes the sidebar panel."""
     assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()

@@ -1,253 +1,76 @@
 import { LitElement, html, css, nothing } from "lit";
-
-const CARD_VERSION = "0.3.6";
-
-const DOMAIN_OPTIONS = [
-  "zone",
-  "device_tracker",
-  "person",
-  "sensor",
-  "geo_location",
-  "camera",
-];
-
-const LABEL_MODE_OPTIONS = ["initials", "name", "state", "icon"];
+import { normalizeConfig, retainEntries, PRESETS } from "./config.js";
+import { localize } from "./localize.js";
 
 class OpenmapCardEditor extends LitElement {
-  static properties = {
-    hass: { type: Object },
-    config: { type: Object },
-    _newEntity: { state: true },
-  };
-
-  constructor() {
-    super();
-    this.config = {};
-    this._newEntity = "";
+  static properties = { hass: { attribute: false }, _config: { state: true }, _data: { state: true }, _error: { state: true } };
+  setConfig(input) {
+    this._config = normalizeConfig(input);
+    const c = this._config;
+    this._data = { title: c.title, entities: c.entities.map(e => typeof e === "string" ? e : e.entity),
+      overlay_layers: c.overlay_layers.map(l => l.preset), include_domains: c.include_domains,
+      geo_location_sources: c.geo_location_sources.join(", "), basemap: c.basemap, theme_mode: c.theme_mode,
+      default_zoom: c.default_zoom, cluster: c.cluster, map_id: c.map_id,
+      center_lat: c.center?.[0], center_lon: c.center?.[1] };
   }
-
-  setConfig(config) {
-    this.config = { ...config };
-  }
-
-  static styles = css`
-    :host {
-      display: block;
-      font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif);
+  _t(key) { return localize(this.hass?.language, key); }
+  _change(event) {
+    event.stopPropagation();
+    this._data = { ...this._data, ...event.detail.value };
+    const previous = this._config;
+    const data = this._data;
+    const center = data.center_lat == null || data.center_lat === "" ? null : [Number(data.center_lat), Number(data.center_lon)];
+    if ((data.center_lat == null || data.center_lat === "") !== (data.center_lon == null || data.center_lon === "")) {
+      this._error = "Set both latitude and longitude, or clear the center."; return;
     }
-    .section { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--divider-color, #e0e0e0); }
-    .section-title { font-size: 13px; font-weight: 600; margin: 0 0 4px 0; }
-    .section-hint { font-size: 11px; opacity: 0.7; margin: 0 0 10px 0; line-height: 1.4; }
-  `;
-
-  _emit() {
-    this.dispatchEvent(new CustomEvent("config-changed", {
-      detail: { config: this.config },
-      bubbles: true,
-      composed: true,
-    }));
+    try {
+      const { center_lat: _lat, center_lon: _lon, ...fields } = data;
+      const next = normalizeConfig({ ...previous, ...fields, center,
+        entities: retainEntries(previous.entities, data.entities || [], "entity", id => id),
+        overlay_layers: retainEntries(previous.overlay_layers, data.overlay_layers || [], "preset", preset => ({ preset, visible: false })),
+      });
+      this._error = null;
+      this._config = next;
+      this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: next }, bubbles: true, composed: true }));
+    } catch (error) { this._error = error.message; }
   }
-
-  _handleSimpleChange(e) {
-    const values = e.detail?.value;
-    if (!values || typeof values !== "object") return;
-    const next = { ...this.config, ...values };
-    // Never persist empty center fields (they would become [0, 0]).
-    if (next.center_lat === "" || next.center_lat == null) delete next.center_lat;
-    if (next.center_lon === "" || next.center_lon == null) delete next.center_lon;
-    this.config = next;
-    this._emit();
+  _clearCenter() {
+    this._change({ stopPropagation() {}, detail: { value: { center_lat: undefined, center_lon: undefined } } });
   }
-
-  _handleMarkerForm(e) {
-    const v = e.detail?.value;
-    if (!v) return;
-    const marker = { ...this.config.marker };
-    if (v.marker_size !== undefined) marker.size = Number(v.marker_size) || 48;
-    if (v.marker_label_mode !== undefined) marker.label_mode = v.marker_label_mode;
-    marker.color = { ...(marker.color || {}) };
-    if (v.marker_color_custom !== undefined) {
-      if (v.marker_color_custom) {
-        const existing = marker.color.default;
-        marker.color.default = existing && existing !== "default" ? existing : "#F44336";
-      } else {
-        marker.color.default = "default";
-      }
-    }
-    if (v.marker_color !== undefined && v.marker_color_custom) {
-      marker.color.default = v.marker_color;
-    }
-    this.config = { ...this.config, marker };
-    this._emit();
-  }
-
+  _label = schema => this._t({ overlay_layers: "defaults", geo_location_sources: "sources", include_domains: "domains", theme_mode: "theme", default_zoom: "zoom", map_id: "mapId", center_lat: "centerLat", center_lon: "centerLon" }[schema.name] || schema.name);
   render() {
-    if (!this.hass) return nothing;
-    const cfg = this.config;
-    const themeMode = cfg.theme_mode || cfg.dark_mode || "auto";
-    const markerColorDefault = cfg.marker?.color?.default;
-    const markerColorCustom = markerColorDefault !== undefined && markerColorDefault !== "default";
-    const markerSchema = [
-      { name: "marker_size", label: "Marker Size (px)", selector: { number: { mode: "box", min: 24, max: 96, step: 2 } } },
-      { name: "marker_label_mode", label: "Marker Label", selector: { select: { options: LABEL_MODE_OPTIONS } } },
-      { name: "marker_color_custom", label: "Custom Marker Color", selector: { boolean: {} } },
+    if (!this._config || !this.hass) return nothing;
+    const content = [
+      { name: "entities", selector: { entity: { multiple: true } } },
+      { name: "overlay_layers", selector: { select: { multiple: true, mode: "list", options: Object.entries(PRESETS).map(([value, label]) => ({ value, label })) } } },
+      { name: "include_domains", selector: { select: { multiple: true, options: ["person", "device_tracker", "zone", "sensor", "geo_location", "camera"] } } },
+      { name: "geo_location_sources", selector: { text: {} } },
     ];
-    if (markerColorCustom) {
-      markerSchema.push({ name: "marker_color", label: "Marker Color", selector: { color: {} } });
-    }
-
-    return html`
-      <ha-form
-        .hass=${this.hass}
-        .data=${{
-          title: cfg.title || "",
-          default_zoom: cfg.default_zoom || 14,
-          center_lat: cfg.center_lat !== undefined ? cfg.center_lat : this.hass.config?.latitude ?? "",
-          center_lon: cfg.center_lon !== undefined ? cfg.center_lon : this.hass.config?.longitude ?? "",
-          theme_mode: themeMode,
-          cluster: cfg.cluster !== false,
-          include_domains: cfg.include_domains || [],
-          attribution: cfg.attribution || "",
-        }}
-        .schema=${[
-          { name: "title", label: "Title", selector: { text: {} } },
-          { name: "default_zoom", label: "Default Zoom", selector: { number: { mode: "box", min: 1, max: 20, step: 1 } } },
-          { name: "center_lat", label: "Map Center Latitude", selector: { number: { mode: "box", min: -90, max: 90, step: 0.0001 } } },
-          { name: "center_lon", label: "Map Center Longitude", selector: { number: { mode: "box", min: -180, max: 180, step: 0.0001 } } },
-          { name: "theme_mode", label: "Theme Mode", selector: { select: { options: ["auto", "light", "dark"] } } },
-          { name: "cluster", label: "Cluster Markers", selector: { boolean: {} } },
-          {
-            name: "include_domains",
-            label: "Include Domains",
-            selector: { select: { multiple: true, custom_value: true, options: DOMAIN_OPTIONS } },
-          },
-          { name: "attribution", label: "Custom Attribution", selector: { text: {} } },
-        ]}
-        .computeLabel=${(s) => s.label}
-        @value-changed=${this._handleSimpleChange}
-      ></ha-form>
-
-      <div class="section">
-        <p class="section-title">Explicit Entities</p>
-        <p class="section-hint">
-          Select device trackers, persons, zones, or sensors with latitude/longitude attributes.
-        </p>
-        <ha-form
-          .hass=${this.hass}
-          .data=${{ entities: (cfg.entities || []).filter((e) => typeof e === "string") }}
-          .schema=${[
-            {
-              name: "entities",
-              label: "Entities",
-              selector: {
-                entity: {
-                  multiple: true,
-                  filter: [
-                    { domain: ["device_tracker", "person", "zone", "sensor", "geo_location"] },
-                  ],
-                },
-              },
-            },
-          ]}
-          .computeLabel=${(s) => s.label}
-          @value-changed=${(e) => {
-            const v = e.detail?.value?.entities;
-            if (!Array.isArray(v)) return;
-            this.config = { ...this.config, entities: v };
-            this._emit();
-          }}
-        ></ha-form>
-      </div>
-
-      <div class="section">
-        <p class="section-title">Geolocation Sources</p>
-        <p class="section-hint">
-          Include all geo_location entities matching these sources (e.g. gpslogger, icloud).
-        </p>
-        <ha-form
-          .hass=${this.hass}
-          .data=${{ geo_location_sources: (cfg.geo_location_sources || cfg.geolocation_sources || []) }}
-          .schema=${[
-            {
-              name: "geo_location_sources",
-              label: "Geolocation Sources",
-              selector: {
-                entity: {
-                  multiple: true,
-                  filter: [{ domain: "geo_location" }],
-                },
-              },
-            },
-          ]}
-          .computeLabel=${(s) => s.label}
-          @value-changed=${(e) => {
-            const v = e.detail?.value?.geo_location_sources;
-            if (!Array.isArray(v)) return;
-            const sources = [...new Set(v.map((id) => id.replace(/^geo_location\./, "")))];
-            this.config = { ...this.config, geo_location_sources: sources };
-            this._emit();
-          }}
-        ></ha-form>
-      </div>
-
-      <div class="section">
-        <p class="section-title">Marker Appearance</p>
-        <p class="section-hint">
-          Size, label, and color of the circular markers. Disable the custom color to follow the theme accent.
-        </p>
-        <ha-form
-          .hass=${this.hass}
-          .data=${{
-            marker_size: cfg.marker?.size || 48,
-            marker_label_mode: cfg.marker?.label_mode || "initials",
-            marker_color_custom: markerColorCustom,
-            marker_color: markerColorCustom ? markerColorDefault : "#F44336",
-          }}
-          .schema=${markerSchema}
-          .computeLabel=${(s) => s.label}
-          @value-changed=${this._handleMarkerForm}
-        ></ha-form>
-      </div>
-
-      <div class="section">
-        <p class="section-title">Popup Configuration</p>
-        <ha-form
-          .hass=${this.hass}
-          .data=${{
-            popup_title: cfg.marker?.popup?.title || "friendly_name",
-            popup_body: cfg.marker?.popup?.body || "",
-          }}
-          .schema=${[
-            { name: "popup_title", label: "Popup Title Template", selector: { text: {} } },
-            { name: "popup_body", label: "Popup Body Template", selector: { text: { multiline: true } } },
-          ]}
-          .computeLabel=${(s) => s.label}
-          @value-changed=${(e) => {
-            const v = e.detail?.value;
-            if (!v) return;
-            this.config = {
-              ...this.config,
-              marker: {
-                ...this.config.marker,
-                popup: { ...this.config.marker?.popup, title: v.popup_title, body: v.popup_body },
-              },
-            };
-            this._emit();
-          }}
-        ></ha-form>
-      </div>
-
-      <div class="section">
-        <p class="section-hint">Open Map card editor v${CARD_VERSION}</p>
-      </div>
-    `;
+    const appearance = [
+      { name: "title", selector: { text: {} } },
+      { name: "basemap", selector: { select: { options: ["osm", "carto"] } } },
+      { name: "theme_mode", selector: { select: { options: ["auto", "light", "dark"] } } },
+      { name: "cluster", selector: { boolean: {} } },
+      { name: "default_zoom", selector: { number: { min: 0, max: 20, step: 1, mode: "box" } } },
+      { name: "map_id", selector: { text: {} } },
+      { name: "center_lat", selector: { number: { min: -90, max: 90, step: 0.0001, mode: "box" } } },
+      { name: "center_lon", selector: { number: { min: -180, max: 180, step: 0.0001, mode: "box" } } },
+    ];
+    return html`<h2>${this._t("content")}</h2><p>${this._t("selected")}</p>
+      <ha-form .hass=${this.hass} .data=${this._data} .schema=${content} .computeLabel=${this._label} @value-changed=${this._change}></ha-form>
+      <h2>${this._t("appearance")}</h2>
+      <ha-form .hass=${this.hass} .data=${this._data} .schema=${appearance} .computeLabel=${this._label} @value-changed=${this._change}></ha-form>
+      <button @click=${this._clearCenter}>${this._t("clearCenter")}</button>
+      ${this._error ? html`<p role="alert">${this._error}</p>` : nothing}
+      <p>${this._t("advanced")}</p>`;
   }
+  static styles = css`
+    :host { display:block; color:var(--primary-text-color); font-family:var(--ha-font-family-body,Roboto,sans-serif); }
+    h2 { font-size:18px; font-weight:500; margin:24px 0 8px; } h2:first-child { margin-top:0; }
+    p { color:var(--secondary-text-color); font-size:14px; line-height:1.5; margin:8px 0 16px; max-width:65ch; }
+    button { min-height:48px; padding:8px 16px; border:0; border-radius:8px; background:var(--secondary-background-color); color:var(--primary-text-color); font:inherit; cursor:pointer; }
+    button:focus-visible { outline:3px solid var(--primary-color); outline-offset:2px; }
+    [role="alert"] { color:var(--error-color); } ::selection { background:var(--primary-color); color:var(--text-primary-color); }
+  `;
 }
-
-if (!customElements.get("openmap-card-editor")) {
-  customElements.define("openmap-card-editor", OpenmapCardEditor);
-} else {
-  // Already defined (possibly by a stale old resource); leave it alone.
-}
-
-export { OpenmapCardEditor };
+if (!customElements.get("openmap-card-editor")) customElements.define("openmap-card-editor", OpenmapCardEditor);

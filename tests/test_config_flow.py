@@ -31,7 +31,9 @@ async def test_user_flow_creates_entry(hass: HomeAssistant) -> None:
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["title"] == "Open Map"
-    assert result["data"] == {"title": "My Map"}
+    assert result["data"]["title"] == "My Map"
+    assert result["data"]["entities"] == []
+    assert result["data"]["overlay_layers"] == []
 
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
@@ -50,16 +52,12 @@ async def test_single_instance(hass: HomeAssistant, mock_config_entry) -> None:
     assert result["reason"] == "already_configured"
 
 
-async def test_options_flow_round_trip(
-    hass: HomeAssistant, mock_config_entry
-) -> None:
+async def test_options_flow_round_trip(hass: HomeAssistant, mock_config_entry) -> None:
     """Options flow saves values into entry.options."""
     assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    result = await hass.config_entries.options.async_init(
-        mock_config_entry.entry_id
-    )
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "init"
 
@@ -73,7 +71,7 @@ async def test_options_flow_round_trip(
             "attribution": "© me",
             "carto_api_key": "my-carto-key",
             "entities": ["person.home"],
-            "geolocation_sources": "gpslogger, icloud",
+            "geo_location_sources": "gpslogger, icloud",
             "include_domains": ["zone", "device_tracker"],
             "marker_color_default": "blue",
             "marker_popup_title": "friendly_name",
@@ -91,7 +89,7 @@ async def test_options_flow_round_trip(
     assert options["carto_api_key"] == "my-carto-key"
     assert options["entities"] == ["person.home"]
     # Comma-separated text input is normalized into a clean list.
-    assert options["geolocation_sources"] == ["gpslogger", "icloud"]
+    assert options["geo_location_sources"] == ["gpslogger", "icloud"]
     assert options["include_domains"] == ["zone", "device_tracker"]
     assert options["marker"]["color"]["default"] == "blue"
     assert options["marker"]["popup"]["body"] == "Last seen: {last_seen}"
@@ -111,9 +109,7 @@ async def test_options_flow_persists_empty_lists(
     )
     await hass.async_block_till_done()
 
-    result = await hass.config_entries.options.async_init(
-        mock_config_entry.entry_id
-    )
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         user_input={
@@ -123,7 +119,7 @@ async def test_options_flow_persists_empty_lists(
             "cluster": True,
             "attribution": "",
             "entities": [],
-            "geolocation_sources": "",
+            "geo_location_sources": "",
             "include_domains": [],
             "marker_color_default": "red",
             "marker_popup_title": "friendly_name",
@@ -153,9 +149,7 @@ async def test_options_flow_preserves_blank_fields(
     )
     await hass.async_block_till_done()
 
-    result = await hass.config_entries.options.async_init(
-        mock_config_entry.entry_id
-    )
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         user_input={
@@ -187,9 +181,7 @@ async def test_options_flow_clearing_key_removes_it(
     )
     await hass.async_block_till_done()
 
-    result = await hass.config_entries.options.async_init(
-        mock_config_entry.entry_id
-    )
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         user_input={
@@ -209,7 +201,7 @@ async def test_options_flow_clearing_key_removes_it(
     await hass.async_block_till_done()
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    assert "carto_api_key" not in mock_config_entry.options
+    assert mock_config_entry.options["carto_api_key"] == ""
 
 
 async def test_options_flow_marker_color_default_is_valid_choice(
@@ -224,9 +216,7 @@ async def test_options_flow_marker_color_default_is_valid_choice(
     assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    result = await hass.config_entries.options.async_init(
-        mock_config_entry.entry_id
-    )
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     # Submit exactly what the frontend sends for an untouched form.
     untouched = result["data_schema"]({})
     assert untouched["marker_color_default"] in [
@@ -258,9 +248,7 @@ async def test_options_flow_frontend_submit_gate(
     assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    result = await hass.config_entries.options.async_init(
-        mock_config_entry.entry_id
-    )
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     assert result["type"] == FlowResultType.FORM
 
     from homeassistant.helpers.data_entry_flow import FlowManagerResourceView
@@ -300,9 +288,7 @@ async def test_options_flow_no_legacy_entry_arg(
     assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    result = await hass.config_entries.options.async_init(
-        mock_config_entry.entry_id
-    )
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     assert result["type"] == FlowResultType.FORM
 
     # The flow runs end-to-end through the manager.

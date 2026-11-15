@@ -1,5 +1,7 @@
 # Tests for the Open Map custom integration.
-# Home Assistant 2026.9+ requires Python >= 3.14.
+# Matching official fixtures and Core; Python >= 3.14.2.
 colorlog==6.9.0
-pytest-homeassistant-custom-component==0.13.363
+pytest-homeassistant==2026.11.1
+pytest-cov==7.1.0
+pytest-timeout==2.4.0
 ruff==0.14.5

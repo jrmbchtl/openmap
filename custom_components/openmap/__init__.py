@@ -1,5 +1,6 @@
 """The Open Map integration."""
 
+from dataclasses import dataclass
 from functools import lru_cache
 import logging
 import os
@@ -14,10 +15,23 @@ from homeassistant.components.panel_custom import async_register_panel
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.loader import async_get_integration
 
+from .config import DEFAULT_CONFIG, canonical_config
 from .const import DOMAIN
 from .http import async_register_http_views
+from .tiles import TileClient
+
+
+@dataclass
+class OpenMapRuntime:
+    """Resources owned by one loaded config entry."""
+
+    tiles: TileClient
+
+
+type OpenMapConfigEntry = ConfigEntry[OpenMapRuntime]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,22 +45,7 @@ _REGISTERED_STATIC_PATHS = f"{DOMAIN}_registered_static_paths"
 # Defaults for the sidebar panel card. The options flow writes to
 # config_entry.options, which is merged over these defaults so the
 # "Configure" dialog actually controls the sidebar map.
-DEFAULT_PANEL_CONFIG = {
-    "title": "Open Map",
-    "default_zoom": 14,
-    "theme_mode": "auto",
-    "cluster": True,
-    "entities": [],
-    "geo_location_sources": [],
-    "include_domains": [],
-    "attribution": "",
-    "marker": {
-        "color": {"default": "default"},
-        "size": 48,
-        "label_mode": "initials",
-        "popup": {},
-    },
-}
+DEFAULT_PANEL_CONFIG = DEFAULT_CONFIG
 
 
 def _panel_config_from_entry(entry: ConfigEntry) -> dict:
@@ -54,11 +53,9 @@ def _panel_config_from_entry(entry: ConfigEntry) -> dict:
 
     Precedence: built-in defaults < entry.data (initial setup) < entry.options.
     """
-    config = {**DEFAULT_PANEL_CONFIG}
-    for key, value in (entry.data or {}).items():
-        if value is not None and value != "":
-            config[key] = value
-    config.update(entry.options or {})
+    config = canonical_config(dict(entry.data), dict(entry.options))
+    config["map_id"] = config.get("map_id") or entry.entry_id
+    config.pop("carto_api_key", None)  # Credentials never ride in public panel config.
     return config
 
 
@@ -74,9 +71,7 @@ def _js_url(version: str) -> str:
 
 def _local_card_path(hass: HomeAssistant) -> str:
     """Return the path of the built card bundle."""
-    return hass.config.path(
-        "custom_components/openmap/frontend/dist/openmap-card.js"
-    )
+    return hass.config.path("custom_components/openmap/frontend/dist/openmap-card.js")
 
 
 async def _async_register_panel(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -140,7 +135,13 @@ async def _async_register_static_path(hass: HomeAssistant) -> str:
     try:
         # Versioned URL is immutable per release, so long-lived caching is safe.
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(url, local_path, cache_headers=True)]
+            [
+                StaticPathConfig(
+                    url.rsplit("/", 1)[0],
+                    os.path.dirname(local_path),
+                    cache_headers=True,
+                )
+            ]
         )
     except (HomeAssistantError, ValueError) as err:
         _LOGGER.exception("Failed to register static path")
@@ -156,14 +157,19 @@ def _async_add_extra_js(hass: HomeAssistant, url: str) -> None:
     add_extra_js_url(hass, url)
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: OpenMapConfigEntry) -> bool:
     """Set up Open Map from a config entry."""
     domain_data = hass.data.setdefault(DOMAIN, {})
+    entry.runtime_data = OpenMapRuntime(TileClient(async_get_clientsession(hass)))
 
-    url = await _async_register_static_path(hass)
-    _async_add_extra_js(hass, url)
-    async_register_http_views(hass)
-    await _async_register_panel(hass, entry)
+    try:
+        url = await _async_register_static_path(hass)
+        _async_add_extra_js(hass, url)
+        async_register_http_views(hass)
+        await _async_register_panel(hass, entry)
+    except BaseException:
+        await entry.runtime_data.tiles.close()
+        raise
 
     domain_data.setdefault("entries", {})[entry.entry_id] = entry
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
@@ -172,9 +178,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: OpenMapConfigEntry) -> bool:
     """Unload an Open Map config entry."""
     domain_data = hass.data.get(DOMAIN, {})
+    await entry.runtime_data.tiles.close()
     entries: dict = domain_data.get("entries", {})
 
     entries.pop(entry.entry_id, None)

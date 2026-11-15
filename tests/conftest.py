@@ -9,17 +9,11 @@ from unittest.mock import AsyncMock, patch
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.openmap.const import DOMAIN
 
 TEST_DIST_FILE = "frontend/dist/openmap-card.js"
-
-
-@pytest.fixture(autouse=True)
-def enable_custom_integrations(hass: HomeAssistant) -> None:
-    """Make the custom integration discoverable in tests."""
-    hass.data.pop("custom_components")
 
 
 @pytest.fixture(autouse=True)

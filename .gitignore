@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 node_modules/
 .coverage
+test-results/
+playwright-report/
+tests/testing_config/

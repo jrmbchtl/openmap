@@ -1,17 +1,12 @@
-"""Config flow for Open Map integration."""
+"""Content-first configuration with explicit, reversible clearing semantics."""
 
 from typing import Any
 
 from homeassistant import config_entries
-from homeassistant.config_entries import (
-    ConfigFlow,
-    ConfigFlowResult,
-    OptionsFlow,
-)
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
     BooleanSelector,
-    BooleanSelectorConfig,
     EntitySelector,
     EntitySelectorConfig,
     NumberSelector,
@@ -19,243 +14,165 @@ from homeassistant.helpers.selector import (
     NumberSelectorMode,
     SelectSelector,
     SelectSelectorConfig,
-    SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
 )
 import voluptuous as vol
 
+from .config import DEFAULT_CONFIG, apply_form, canonical_config
 from .const import DOMAIN
+from .ludwigsburg_wms import LUDWIGSBURG_OVERLAY_PRESETS
 
-DOMAIN_OPTIONS = ["zone", "device_tracker", "person", "sensor", "geo_location"]
-# "default" renders the marker in the theme accent color; the rest are
-# fixed marker colors.
+DOMAIN_OPTIONS = [
+    "zone",
+    "device_tracker",
+    "person",
+    "sensor",
+    "geo_location",
+    "camera",
+]
 COLOR_OPTIONS = ["default", "red", "orange", "green", "blue", "purple"]
 
 
-def _normalize_list(value):
-    """Accept a comma-separated string or a list and return a clean list."""
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [item.strip() for item in value.split(",") if item.strip()]
-    if isinstance(value, list):
-        return [item for item in value if item]
-    return []
+def content_schema(settings: dict) -> dict:
+    """Never discover content implicitly; forms start with empty selections."""
+    return {
+        vol.Required(
+            "entities",
+            default=[
+                e if isinstance(e, str) else e["entity"] for e in settings["entities"]
+            ],
+        ): EntitySelector(EntitySelectorConfig(multiple=True)),
+        vol.Required(
+            "overlay_layers", default=[e["preset"] for e in settings["overlay_layers"]]
+        ): SelectSelector(
+            SelectSelectorConfig(
+                multiple=True, options=list(LUDWIGSBURG_OVERLAY_PRESETS)
+            )
+        ),
+        vol.Required(
+            "include_domains", default=settings["include_domains"]
+        ): SelectSelector(SelectSelectorConfig(multiple=True, options=DOMAIN_OPTIONS)),
+        vol.Optional(
+            "geo_location_sources",
+            description={
+                "suggested_value": ", ".join(settings["geo_location_sources"])
+            },
+        ): TextSelector(TextSelectorConfig()),
+    }
 
 
 class OpenMapConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Open Map."""
+    """One sidebar panel per HA instance."""
 
     VERSION = 1
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle the initial step."""
-        # The panel and card are global; a second entry would fight over the
-        # same sidebar panel, so only one instance is allowed.
         await self.async_set_unique_id(DOMAIN)
         self._abort_if_unique_id_configured()
-
         if user_input is not None:
-            return self.async_create_entry(title="Open Map", data=user_input)
-
-        data_schema = vol.Schema(
-            {
-                vol.Required(
-                    "title",
-                    default="Open Map",
-                ): TextSelector(TextSelectorConfig()),
-            }
-        )
-
-        return self.async_show_form(
-            step_id="user", data_schema=data_schema, description_placeholders={}
-        )
+            return self.async_create_entry(
+                title="Open Map", data=canonical_config(user_input)
+            )
+        schema = {
+            vol.Required("title", default="Open Map"): TextSelector(
+                TextSelectorConfig()
+            ),
+            **content_schema(DEFAULT_CONFIG),
+        }
+        return self.async_show_form(step_id="user", data_schema=vol.Schema(schema))
 
     @staticmethod
     @callback
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
     ) -> OpenMapOptionsFlowHandler:
-        """Get the options flow for this handler."""
         return OpenMapOptionsFlowHandler()
 
 
 class OpenMapOptionsFlowHandler(OptionsFlow):
-    """Handle options flow for Open Map.
-
-    The base class exposes the owning entry as ``self.config_entry`` since
-    2024.11; constructing it with an entry argument is deprecated and rejected
-    in newer releases, so it must not be passed here.
-    """
+    """Keep rich YAML settings intact when editing simple selectors."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manage the options."""
-        if user_input is not None:
-            # Blank fields are dropped, NOT deleted from the saved options:
-            # async_create_entry replaces the whole options dict, so a form
-            # the frontend submits without a blanked password field would
-            # otherwise wipe previously stored values (e.g. the CARTO key).
-            previous = dict(self.config_entry.options)
-            secret_fields = ("carto_api_key",)
-            cleaned_input = {}
-            for k, v in user_input.items():
-                if v is None or v == "":
-                    if k in secret_fields and k in previous:
-                        # An explicitly emptied secret clears the stored one.
-                        previous.pop(k, None)
-                    continue
-                if k in ("geolocation_sources", "include_domains"):
-                    cleaned_input[k] = _normalize_list(v)
-                elif k == "marker_color_default":
-                    marker = cleaned_input.setdefault("marker", {})
-                    marker.setdefault("color", {})["default"] = v
-                elif k == "marker_popup_title":
-                    marker = cleaned_input.setdefault("marker", {})
-                    marker.setdefault("popup", {})["title"] = v
-                elif k == "marker_popup_body":
-                    marker = cleaned_input.setdefault("marker", {})
-                    marker.setdefault("popup", {})["body"] = v
-                else:
-                    cleaned_input[k] = v
-            return self.async_create_entry(title="", data={**previous, **cleaned_input})
-
-        # Merge options with data for backward compatibility fallback.
+        errors = {}
         entry = self.config_entry
-        options = {**entry.data, **entry.options}
-        stored_color = (
-            options.get("marker_color_default")
-            or options.get("marker", {}).get("color", {}).get("default")
-        )
-
-        data_schema = vol.Schema(
+        if user_input is not None:
+            try:
+                settings = apply_form(dict(entry.data), dict(entry.options), user_input)
+            except ValueError as error:
+                errors["base"] = str(error)
+            else:
+                return self.async_create_entry(title="", data=settings)
+        settings = canonical_config(dict(entry.data), dict(entry.options))
+        center = settings["center"] or [None, None]
+        color = settings["marker"]["color"]["default"]
+        fields = content_schema(settings)
+        fields.update(
             {
                 vol.Required(
-                    "title",
-                    default=options.get("title", "Open Map"),
+                    "title", default=settings["title"] or "Open Map"
                 ): TextSelector(TextSelectorConfig()),
                 vol.Required(
-                    "default_zoom",
-                    default=options.get("default_zoom", 14),
+                    "default_zoom", default=settings["default_zoom"]
                 ): NumberSelector(
                     NumberSelectorConfig(
-                        min=1,
-                        max=20,
-                        step=1,
-                        mode=NumberSelectorMode.BOX,
+                        min=0, max=20, step=1, mode=NumberSelectorMode.BOX
                     )
                 ),
                 vol.Required(
-                    "theme_mode",
-                    default=options.get("theme_mode")
-                    or options.get("dark_mode", "auto"),
+                    "theme_mode", default=settings["theme_mode"]
                 ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=["auto", "light", "dark"],
-                        mode=SelectSelectorMode.DROPDOWN,
-                    )
+                    SelectSelectorConfig(options=["auto", "light", "dark"])
                 ),
-                vol.Required(
-                    "cluster",
-                    default=options.get("cluster", True),
-                ): BooleanSelector(BooleanSelectorConfig()),
+                vol.Required("basemap", default=settings["basemap"]): SelectSelector(
+                    SelectSelectorConfig(options=["osm", "carto"])
+                ),
+                vol.Required("cluster", default=settings["cluster"]): BooleanSelector(),
                 vol.Optional(
-                    "center_lat",
-                    description={"suggested_value": options.get("center_lat")},
+                    "center_lat", description={"suggested_value": center[0]}
                 ): NumberSelector(
                     NumberSelectorConfig(
-                        min=-90,
-                        max=90,
-                        step=0.001,
-                        mode=NumberSelectorMode.BOX,
+                        min=-90, max=90, step=0.001, mode=NumberSelectorMode.BOX
                     )
                 ),
                 vol.Optional(
-                    "center_lon",
-                    description={"suggested_value": options.get("center_lon")},
+                    "center_lon", description={"suggested_value": center[1]}
                 ): NumberSelector(
                     NumberSelectorConfig(
-                        min=-180,
-                        max=180,
-                        step=0.001,
-                        mode=NumberSelectorMode.BOX,
+                        min=-180, max=180, step=0.001, mode=NumberSelectorMode.BOX
                     )
                 ),
+                vol.Optional("clear_center", default=False): BooleanSelector(),
                 vol.Optional(
                     "attribution",
-                    description={"suggested_value": options.get("attribution", "")},
+                    description={"suggested_value": settings["attribution"]},
                 ): TextSelector(TextSelectorConfig()),
-                vol.Optional(
-                    "carto_api_key",
-                    description={"suggested_value": options.get("carto_api_key")},
-                ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
-                vol.Required(
-                    "entities",
-                    default=options.get("entities", []),
-                ): EntitySelector(
-                    EntitySelectorConfig(
-                        multiple=True,
-                    )
+                vol.Optional("carto_api_key"): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.PASSWORD)
                 ),
-                vol.Optional(
-                    "geolocation_sources",
-                    description={
-                        "suggested_value": ", ".join(
-                            _normalize_list(
-                                options.get("geolocation_sources")
-                                or options.get("geo_location_sources", [])
-                            )
-                        )
-                    },
-                ): TextSelector(TextSelectorConfig()),
-                vol.Required(
-                    "include_domains",
-                    default=_normalize_list(options.get("include_domains", [])),
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=DOMAIN_OPTIONS,
-                        multiple=True,
-                        mode=SelectSelectorMode.DROPDOWN,
-                    )
-                ),
-                vol.Required(
-                    "marker_color_default",
-                    # A custom hex color saved from the card editor is not a
-                    # select option; fall back to the theme-accent default
-                    # instead of offering an invalid choice.
-                    default=stored_color
-                    if stored_color in COLOR_OPTIONS
-                    else "default",
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=COLOR_OPTIONS,
-                        mode=SelectSelectorMode.DROPDOWN,
-                    )
+                vol.Optional("clear_carto_key", default=False): BooleanSelector(),
+                vol.Optional("marker_color_default", default=color): TextSelector(
+                    TextSelectorConfig()
                 ),
                 vol.Optional(
                     "marker_popup_title",
                     description={
-                        "suggested_value": options.get("marker_popup_title")
-                        or options.get("marker", {})
-                        .get("popup", {})
-                        .get("title", "friendly_name")
+                        "suggested_value": settings["marker"]["popup"]["title"]
                     },
                 ): TextSelector(TextSelectorConfig()),
                 vol.Optional(
                     "marker_popup_body",
                     description={
-                        "suggested_value": options.get("marker_popup_body")
-                        or options.get("marker", {})
-                        .get("popup", {})
-                        .get("body", "")
+                        "suggested_value": settings["marker"]["popup"]["body"]
                     },
                 ): TextSelector(TextSelectorConfig()),
             }
         )
-
-        return self.async_show_form(step_id="init", data_schema=data_schema)
+        return self.async_show_form(
+            step_id="init", data_schema=vol.Schema(fields), errors=errors
+        )

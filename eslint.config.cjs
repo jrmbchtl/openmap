@@ -20,6 +20,11 @@ module.exports = [
         queueMicrotask: "readonly",
         setTimeout: "readonly",
         clearTimeout: "readonly",
+        AbortController: "readonly",
+        AbortSignal: "readonly",
+        URL: "readonly",
+        Blob: "readonly",
+        Image: "readonly",
       },
     },
     rules: {

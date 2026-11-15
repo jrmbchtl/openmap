@@ -1,1456 +1,252 @@
 import { LitElement, html, css, nothing } from "lit";
-import L from "./leaflet-shim.js";
-import "leaflet.markercluster";
-import "./openmap-card-editor.js";
-
-const CARD_VERSION = "0.3.6";
-
-// Debug logging: opt-in via ?debug=1, ?openmap_debug=1, or
-// localStorage["openmap_debug"] = "1".
-const _isDebugFromUrl = () => {
-  try {
-    if (typeof window === "undefined") return false;
-    const qs = window.location?.search || "";
-    if (qs.includes("debug=1") || qs.includes("openmap_debug=1")) return true;
-    if (window.localStorage?.getItem("openmap_debug") === "1") return true;
-  } catch (e) {
-    // ignore
-  }
-  return false;
-};
-
-const _dlog = (tag, ...args) => {
-  if (typeof window === "undefined" || !window.__OPENMAP_DEBUG) return;
-  try {
-    console.log(`%c[openmap ${tag}]`, "color:#4caf50;font-weight:600", ...args);
-  } catch (e) {
-    // ignore
-  }
-};
-
-const _dwarn = (tag, ...args) => {
-  try {
-    console.warn(`[openmap ${tag}]`, ...args);
-  } catch (e) {
-    // ignore
-  }
-};
-
-if (typeof window !== "undefined") {
-  window.__OPENMAP_DEBUG = _isDebugFromUrl();
-  _dwarn("load", `openmap-card.js v${CARD_VERSION} loaded; debug=${window.__OPENMAP_DEBUG}`);
-}
-
-// Match Home Assistant's built-in map card: CARTO Voyager tiles in both
-// light and dark mode (dark mode is applied via a CSS filter, not a
-// separate tile layer). Since 2025/2026 CARTO raster tiles require a free
-// API key (https://carto.com/basemaps/apikey); keyless requests still work
-// but are stamped with an "API key required" watermark.
-const TILE_URL_TEMPLATE =
-  "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
-const MAP_ATTR =
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, &copy; <a href="https://carto.com/attributions">CARTO</a>';
-const MAP_OPTIONS = {
-  subdomains: "abcd",
-  minZoom: 0,
-  maxZoom: 20,
-  referrerPolicy: "origin",
-};
-
-// Endpoint serving the key configured in the integration's options flow.
-const BASEMAP_KEY_URL = "/api/openmap/basemap_key";
-
-// Shared per page load: the key is integration-level, so every card and the
-// sidebar panel resolve it once. A rejected/empty lookup is not cached so a
-// later retry (e.g. after the user saved the key) succeeds.
-let _basemapKeyPromise = null;
-
-/**
- * Resolve the integration-wide CARTO key through hass.fetchWithAuth.
- * Cards cannot read config entries from the frontend (those websocket
- * commands are admin-only), so the integration exposes the key on an
- * authenticated HTTP endpoint. The key is a client-side tile key by design:
- * the browser must include it in every tile request.
- */
-const fetchSharedBasemapKey = (hass) => {
-  if (_basemapKeyPromise) return _basemapKeyPromise;
-  if (!hass?.fetchWithAuth) return Promise.resolve(null);
-  _basemapKeyPromise = (async () => {
-    try {
-      const response = await hass.fetchWithAuth(BASEMAP_KEY_URL);
-      if (!response.ok) return null;
-      const data = await response.json();
-      return typeof data?.carto_api_key === "string" && data.carto_api_key
-        ? data.carto_api_key
-        : null;
-    } catch (e) {
-      _dlog("tilekey", "basemap key lookup failed", e);
-      _basemapKeyPromise = null; // allow retry on next render
-      return null;
-    }
-  })();
-  return _basemapKeyPromise;
-};
-
-/**
- * Build the tile URL for the given key. Keys ride along as a `key` query
- * parameter (CARTO's documented pattern); without a key the plain URL is
- * returned so the map keeps working, just watermarked.
- */
-const getTileUrl = (apiKey) => {
-  if (!apiKey) return TILE_URL_TEMPLATE;
-  const separator = TILE_URL_TEMPLATE.includes("?") ? "&" : "?";
-  return `${TILE_URL_TEMPLATE}${separator}key=${encodeURIComponent(apiKey)}`;
-};
-
-const DEFAULT_CENTER = [48.8, 9.2];
-const DEFAULT_ZOOM = 14; // HA map card default
-const MIN_SIZE_W = 200;
-const MIN_SIZE_H = 100;
-
-const NAMED_COLORS = {
-  red: "#F44336",
-  orange: "#FF9800",
-  green: "#4CAF50",
-  blue: "#2196F3",
-  purple: "#9C27B0",
-  default: "#F44336",
-};
-
-const esc = (s) => {
-  if (s == null) return "";
-  if (typeof s === "object") s = JSON.stringify(s);
-  const d = document.createElement("div");
-  d.textContent = String(s);
-  return d.innerHTML;
-};
-
-const debounce = (fn, delay) => {
-  let timeoutId;
-  const debounced = (...args) => {
-    clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => fn(...args), delay);
-  };
-  debounced.cancel = () => clearTimeout(timeoutId);
-  return debounced;
-};
-
-const getRelevantEntityIds = (config, hass) => {
-  const entityIds = new Set();
-  const states = hass?.states || {};
-
-  (config.entities || []).forEach(e => {
-    const entityId = typeof e === "string" ? e : e?.entity;
-    if (entityId) entityIds.add(entityId);
-  });
-
-  (config.geolocation_sources || []).forEach(src => {
-    Object.keys(states).forEach(entityId => {
-      if (entityId.startsWith("geo_location.") && states[entityId].attributes?.source === src) {
-        entityIds.add(entityId);
-      }
-    });
-  });
-
-  (config.include_domains || []).forEach(d => {
-    Object.keys(states).forEach(entityId => {
-      if (entityId.startsWith(d + ".")) entityIds.add(entityId);
-    });
-  });
-
-  return entityIds;
-};
-
-const statesEqual = (prevStates, currStates, entityIds) => {
-  for (const entityId of entityIds) {
-    const prev = prevStates[entityId];
-    const curr = currStates[entityId];
-    if (!prev && !curr) continue;
-    if (!prev || !curr) return false;
-    if (prev.state !== curr.state) return false;
-    const prevAttrs = prev.attributes || {};
-    const currAttrs = curr.attributes || {};
-    if (prevAttrs.latitude !== currAttrs.latitude) return false;
-    if (prevAttrs.longitude !== currAttrs.longitude) return false;
-    if (prevAttrs.gps_accuracy !== currAttrs.gps_accuracy) return false;
-    if (prevAttrs.source !== currAttrs.source) return false;
-  }
-  return true;
-};
-
-const isValidCoordinate = (lat, lon) =>
-  Number.isFinite(lat) && Number.isFinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
-
-const colorToHex = (color) => NAMED_COLORS[color] || color || "#F44336";
-
-const resolveMarkerColor = (configMarker, entityColor) => {
-  if (entityColor) return colorToHex(entityColor);
-  const def = configMarker?.color?.default || "default";
-  return colorToHex(def);
-};
+import { repeat } from "lit/directives/repeat.js";
+import { normalizeConfig, VERSION } from "./config.js";
+import { selectRecords, resolveText } from "./entities.js";
+import { preferenceKey, readVisibility, saveVisibility } from "./preferences.js";
+import { localize } from "./localize.js";
 
 class OpenmapCard extends LitElement {
-  static properties = {
-    hass: { type: Object },
-    config: { type: Object },
-    layout: { type: String, reflect: true },
-    _isPreview: { state: true },
-    _narrow: { state: true },
-  };
-
-  static getConfigElement() {
-    return document.createElement("openmap-card-editor");
-  }
-
-  static getStubConfig() {
-    return {
-      title: "Open Map",
-      default_zoom: DEFAULT_ZOOM,
-      center_lat: undefined,
-      center_lon: undefined,
-      theme_mode: "auto",
-      cluster: true,
-      entities: [],
-      geo_location_sources: [],
-      include_domains: [],
-      attribution: "",
-      marker: {
-        color: { default: "default" },
-        size: 48,
-        label_mode: "initials",
-        popup: {},
-      },
-    };
-  }
+  static properties = { _config: { state: true }, _records: { state: true }, _pane: { state: true }, _search: { state: true },
+    _selected: { state: true }, _visibility: { state: true }, _status: { state: true }, _error: { state: true }, _keyWarning: { state: true }, _isPanel: { state: true }, _starting: { state: true } };
 
   constructor() {
     super();
-    this.config = {};
-    this.layout = "";
-    this._map = null;
-    this._markerLayer = null;
-    this._circleLayer = null;
-    this._pendingRender = false;
-    this._tileLayer = null;
-    this._tileApiKey = null;
-    this._tileApiKeyResolved = false;
-    this._isPanel = false;
-    this._narrow = false;
-    this._ready = false;
-    this._connected = false;
-    this._isPreview = false;
-    this._prevRelevantStates = {};
-    this._renderMarkersDebounced = debounce(this._renderMarkers.bind(this), 150);
-    this._invalidateDebounced = debounce(() => this._invalidateSize(), 100);
-    this._resizeObserver = null;
-    this._visibilityObserver = null;
-    this._mapNode = null;
-    this._debug = _isDebugFromUrl();
+    this._records = []; this._visibility = {}; this._status = {};
+    this._search = ""; this._pane = null; this._selected = null; this._generation = 0;
   }
-
-  // The Leaflet container is created imperatively and kept OUTSIDE the Lit
-  // template so re-renders (theme changes, config edits) can never orphan the
-  // map instance (matches Home Assistant's own ha-map implementation).
-  _ensureMapContainer() {
-    const root = this.shadowRoot?.getElementById("root");
-    if (!root) return null;
-    let map = root.querySelector("#map");
-    if (!map) {
-      map = document.createElement("div");
-      map.id = "map";
-      root.appendChild(map);
+  static async getConfigElement() { await import("./openmap-card-editor.js"); return document.createElement("openmap-card-editor"); }
+  static getStubConfig() { return { type: "custom:openmap-card", entities: [], overlay_layers: [] }; }
+  setConfig(input) {
+    this._config = normalizeConfig(input);
+    this._records = [];
+    this._selected = null;
+    this._resetEngine();
+    this._preferenceKey = null;
+    this._sync();
+  }
+  set hass(value) {
+    const old = this._hass;
+    this._hass = value;
+    this._sync();
+    if (old?.themes?.darkMode !== value?.themes?.darkMode || old?.language !== value?.language) {
+      if (old && this._config?.theme_mode === "auto" && old.themes?.darkMode !== value?.themes?.darkMode) this._resetEngine();
+      this.requestUpdate();
     }
-    return map;
   }
+  get hass() { return this._hass; }
+  set panel(value) { this._isPanel = true; this.classList.add("panel-mode"); this.setConfig(value?.config || {}); }
+  set narrow(value) { this._narrow = value; }
+  getCardSize() { return 7; }
+  getGridOptions() { return { columns: 12, rows: 7, min_columns: 6, min_rows: 5 }; }
+  _t(key, values) { return localize(this._hass?.language, key, values); }
 
-  setConfig(config) {
-    if (!config || typeof config !== "object") throw new Error("Invalid config");
-    const merged = {
-      title: "", entities: [], geo_location_sources: [], include_domains: [],
-      default_zoom: DEFAULT_ZOOM, center: null, theme_mode: "auto",
-      cluster: true, attribution: "", marker: {}, ...config,
-    };
-    // Backwards-compatible alias
-    if (merged.dark_mode && !merged.theme_mode) {
-      merged.theme_mode = merged.dark_mode;
+  _sync() {
+    if (!this._config || !this._hass) return;
+    const records = selectRecords(this._config, this._hass);
+    if (this._records.length !== records.length || records.some((r, i) => r.id !== this._records[i]?.id || r.state !== this._records[i]?.state)) this._records = records;
+    const key = preferenceKey(this._hass.user?.id, this._config);
+    if (key !== this._preferenceKey || !Object.keys(this._visibility).length) {
+      this._preferenceKey = key;
+      this._visibility = readVisibility(this._storage(), key, this._config.overlay_layers);
     }
-    // Backwards-compatible alias for geo_location_sources
-    if (!merged.geo_location_sources && merged.geolocation_sources) {
-      merged.geo_location_sources = merged.geolocation_sources;
-    }
-    // Only treat center as configured when both values are non-empty and
-    // parse to finite numbers. Empty strings must NOT become [0, 0]
-    // (Number("") === 0), which previously moved the map to the ocean.
-    if (config.center_lat !== undefined && config.center_lon !== undefined) {
-      const latStr = String(config.center_lat).trim();
-      const lonStr = String(config.center_lon).trim();
-      if (latStr !== "" && lonStr !== "") {
-        const lat = Number(latStr);
-        const lon = Number(lonStr);
-        if (Number.isFinite(lat) && Number.isFinite(lon)) {
-          merged.center = [lat, lon];
-        }
-      }
-    }
-    this.config = merged;
-    this._prevRelevantStates = {};
-    if (this._map) {
-      this._map.invalidateSize();
-      this._updateMapStyle();
-    }
-    this.requestUpdate();
+    this._engine?.update(this._records);
+    for (const [preset, visible] of Object.entries(this._visibility)) this._engine?.setTraffic(preset, visible);
+    this._ensureEngine();
   }
-
-  set panel(val) {
-    this._isPanel = true;
-    // Panel mode must opt out of the card height chain: HA >= 2026.8 hosts
-    // panels in a block container with height:auto, so percentage heights
-    // collapse to 0 and Leaflet aborts init on a zero-sized container
-    // (leaving only the dark panel background). Viewport units are what
-    // HA's own map panel uses, and are immune to that host change.
-    this.classList.add("panel-mode");
-    this.setConfig(val.config || {});
-    this._tryInit();
-  }
-
-  set narrow(val) {
-    // HA sets this on custom panel elements (set-custom-panel-properties).
-    // On narrow viewports the sidebar is a hidden overlay drawer, so the
-    // panel must keep a hamburger visible to open it (and exit the map).
-    this._narrow = Boolean(val);
-    // Viewport flips can resize the bar; keep Leaflet in sync.
-    if (this._map) this._invalidateDebounced();
-  }
-  set route(val) {}
-
-  getCardSize() {
-    return 7;
-  }
-
-  getGridOptions() {
-    return {
-      columns: "full",
-      rows: 4,
-      min_columns: 6,
-      min_rows: 2,
-    };
-  }
-
-  _isInPreviewContext() {
-    let el = this.parentElement;
-    while (el) {
-      const tag = (el.tagName || "").toLowerCase();
-      if (
-        tag === "hui-card-picker" ||
-        tag === "hui-dialog-create-card" ||
-        tag === "hui-card-preview"
-      ) {
-        return true;
-      }
-      el = el.parentElement;
-    }
-    return false;
-  }
-
+  _storage() { try { return window.localStorage; } catch { return null; } }
   connectedCallback() {
     super.connectedCallback();
-    this._debug = _isDebugFromUrl();
-    if (this._debug) window.__OPENMAP_DEBUG = true;
-    this._connected = true;
-    this._isPreview = this._isInPreviewContext();
-    if (this._isPreview) return;
-
-    if (!this._resizeObserver) {
-      try {
-        this._resizeObserver = new ResizeObserver(() => {
-          if (!this._map) {
-            this._initMap();
-          } else {
-            this._invalidateDebounced();
-          }
-        });
-        this._resizeObserver.observe(this._ensureMapContainer() || this);
-      } catch (e) {
-        _dlog("connect", "ResizeObserver setup failed", e);
-      }
-    }
-
-    if (this._isPanel) {
-      this._tryInit();
-      return;
-    }
-    this._showLoading();
-    queueMicrotask(() => this._initMap());
+    this._resizeObserver = new ResizeObserver(() => { this._engine?.resize(); this._ensureEngine(); });
+    this._resizeObserver.observe(this);
+    this._intersectionObserver = new IntersectionObserver(entries => {
+      this._visible = entries[0]?.isIntersecting;
+      if (this._visible) this._ensureEngine();
+    });
+    this._intersectionObserver.observe(this);
   }
-
   disconnectedCallback() {
+    this._resizeObserver?.disconnect(); this._intersectionObserver?.disconnect();
+    this._resetEngine();
     super.disconnectedCallback();
-    this._connected = false;
-    this._isPreview = false;
-    this._renderMarkersDebounced?.cancel();
-    if (this._map) {
-      this._map.off("resize");
-      if (this._tileLayer) {
-        this._map.removeLayer(this._tileLayer);
-        this._tileLayer = null;
-      }
-      this._map.remove();
-      this._map = null;
-    }
-    if (this._resizeObserver) {
-      this._resizeObserver.disconnect();
-      this._resizeObserver = null;
-    }
-    if (this._visibilityObserver) {
-      this._visibilityObserver.disconnect();
-      this._visibilityObserver = null;
-    }
-    this._markerLayer = null;
-    this._circleLayer = null;
-    this._pendingRender = false;
-    this._mapNode = null;
-    this._ready = false;
   }
-
-  updated(changed) {
-    if (this._isPreview) return;
-    if (changed.has("hass")) {
-      if (this._isPanel && !this._ready && this.hass) {
-        this._tryInit();
-        return;
-      }
-      // Live theme changes (light <-> dark) should re-apply the map style
-      // and force a tile redraw so the map never collapses to a solid color.
-      const oldTheme = changed.get("hass")?.themes?.darkMode;
-      if (this.hass && oldTheme !== this.hass.themes?.darkMode && this._map) {
-        this._updateMapStyle();
-        this._refreshTiles();
-      }
-    }
-    if (changed.has("config")) {
-      this._computePadding();
-    }
-    // Diagnostic: confirm the Leaflet container survives re-renders. If the
-    // node identity ever changes the map would be orphaned (solid-color map).
-    if (this._map && this._mapNode) {
-      const current = this._ensureMapContainer();
-      if (current !== this._mapNode) {
-        _dlog("map-node", "container node replaced during update; re-initializing");
-        this._mapNode = current;
-        if (this._map) {
-          this._map.remove();
-          this._map = null;
-          this._markerLayer = null;
-          this._circleLayer = null;
-          this._tileLayer = null;
-        }
-        this._initMap();
-      }
-    }
-    if (changed.has("hass") && this.hass && this._map) {
-      const relevantEntityIds = getRelevantEntityIds(this.config, this.hass);
-      const curr = {};
-      relevantEntityIds.forEach(id => { curr[id] = this.hass.states[id]; });
-      if (this._prevRelevantStates &&
-          statesEqual(this._prevRelevantStates, curr, relevantEntityIds)) {
-        return;
-      }
-      this._prevRelevantStates = curr;
-      this._renderMarkersDebounced();
-    }
+  updated() { this._engine?.resize(); this._ensureEngine(); }
+  _hasContent() { const c = this._config; return !!c && !!(c.entities.length || c.include_domains.length || c.geo_location_sources.length || c.overlay_layers.length); }
+  _resetEngine() {
+    this._generation++;
+    this._keyController?.abort();
+    this._starting = false;
+    this._engine?.dispose(); this._engine = null;
+    this._status = {}; this._error = false; this._keyWarning = false;
   }
-
-  _tryInit() {
-    if (!this._isPanel || !this.hass || this._ready) return;
-    this._ready = true;
-    this._connected = true;
-    this._showLoading();
-    queueMicrotask(() => this._initMap());
-  }
-
-  _getDefaultCenter() {
-    const lat = this.hass?.config?.latitude;
-    const lon = this.hass?.config?.longitude;
-    if (typeof lat === "number" && typeof lon === "number" && !isNaN(lat) && !isNaN(lon)) {
-      return [lat, lon];
-    }
-    return DEFAULT_CENTER;
-  }
-
-  _countEntities() {
-    if (!this.hass) return 0;
-    const seen = new Set();
-    this._gatherEntities().forEach(({ state }) => {
-      if (!state.entity_id.startsWith("zone.")) seen.add(state.entity_id);
-    });
-    return seen.size;
-  }
-
-  _fitToFocus() {
-    if (!this._map) return;
-    const positions = this._gatherEntities()
-      .map(({ state }) => [
-        Number(state.attributes.latitude),
-        Number(state.attributes.longitude),
-      ])
-      .filter((p) => isValidCoordinate(p[0], p[1]));
-    if (positions.length) {
-      try {
-        this._map.fitBounds(L.latLngBounds(positions).pad(0.3), {
-          maxZoom: this.config.default_zoom || DEFAULT_ZOOM,
-        });
-        return;
-      } catch (e) {
-        _dlog("focus", "fitBounds failed", e);
-      }
-    }
-    const center = this.config.center ?? this._getDefaultCenter();
-    this._map.setView(center, this.config.default_zoom || DEFAULT_ZOOM);
-  }
-
-  _toggleCluster() {
-    this.config = { ...this.config, cluster: !this.config.cluster };
-    this._renderMarkers();
-    this.requestUpdate();
-  }
-
-  get _darkMode() {
-    const mode = this.config?.theme_mode || "auto";
-    if (mode === "dark") return true;
-    if (mode === "light") return false;
-    return Boolean(this.hass?.themes?.darkMode);
-  }
-
-  _updateMapStyle() {
-    const map = this._ensureMapContainer();
-    if (!map) return;
-    const dark = this._darkMode;
-    const isPanel = this._isPanel || this.layout === "panel";
-    map.classList.toggle("dark", dark);
-    map.classList.toggle("forced-dark", this.config?.theme_mode === "dark");
-    map.classList.toggle("forced-light", this.config?.theme_mode === "light");
-    map.classList.toggle("panel", isPanel);
-    // Deterministically apply the dark tile filter for auto+dark too
-    // (matches HA's dark map appearance without relying on class state).
-    map.style.setProperty(
-      "--map-filter",
-      dark
-        ? "invert(0.9) hue-rotate(170deg) brightness(1.5) contrast(1.2) saturate(0.3)"
-        : "invert(0)"
-    );
-  }
-
-  _invalidateSize() {
-    if (!this._map) return;
-    let size;
+  async _ensureEngine() {
+    const target = this.renderRoot?.querySelector("#map");
+    if (this._engine || this._starting || this._error || !this.isConnected || !this._visible || !this._hass || !this._hasContent() || !target?.clientWidth) return;
+    this._starting = true;
+    const generation = this._generation;
     try {
-      size = this._map.getSize();
-    } catch (e) {
-      return;
-    }
-    if (!size || size.x === 0 || size.y === 0) {
-      // Container not laid out yet; retry a few times (theme changes can
-      // briefly zero the size, which would otherwise make Leaflet drop all
-      // tiles). Cap retries so hidden tabs don't loop forever.
-      this._invalidateRetries = (this._invalidateRetries || 0) + 1;
-      if (this._invalidateRetries > 40) {
-        this._invalidateRetries = 0;
-        return;
+      const module = await import("./map-engine.js");
+      let key = null;
+      if (this._config.basemap === "carto") {
+        this._keyController = new AbortController();
+        try {
+          const response = await this._hass.fetchWithAuth("/api/openmap/basemap_key", { cache: "no-store", signal: AbortSignal.any([this._keyController.signal, AbortSignal.timeout(10000)]) });
+          if (response.ok) key = (await response.json())?.carto_api_key;
+        } catch { /* Fall back explicitly to OSM. */ }
       }
-      setTimeout(() => this._invalidateSize(), 150);
-      return;
-    }
-    this._invalidateRetries = 0;
-    this._map.invalidateSize({ debounceMoveend: true });
+      if (generation !== this._generation || !this.isConnected) return;
+      this._keyWarning = this._config.basemap === "carto" && !key;
+      this._engine = new module.MapEngine({ target, config: this._config, cartoKey: key,
+        dark: this._config.theme_mode === "dark" || (this._config.theme_mode === "auto" && this._hass.themes?.darkMode),
+        accent: getComputedStyle(this).getPropertyValue("--primary-color").trim(),
+        fetchWithAuth: (url, options) => this._hass.fetchWithAuth(url, options),
+        onSelect: ids => { this._selected = ids.length === 1 ? ids[0] : null; this._pane = "entities"; this._search = ""; this._focusInspector(); },
+        onStatus: status => { this._status = status; } });
+      this._sync();
+    } catch { if (generation === this._generation) this._error = true; }
+    finally { if (generation === this._generation) this._starting = false; }
   }
-
-  _refreshTiles() {
-    if (!this._map) return;
-    setTimeout(() => {
-      if (!this._map) return;
-      try {
-        this._map.invalidateSize({ debounceMoveend: true });
-        if (this._tileLayer && typeof this._tileLayer.redraw === "function") {
-          this._tileLayer.redraw();
-        }
-      } catch (e) {
-        _dlog("tiles", "refresh failed", e);
-      }
-    }, 50);
+  _togglePane(pane) { this._pane = this._pane === pane ? null : pane; this._selected = null; if (this._pane) this._focusInspector(); }
+  async _focusInspector() {
+    await this.updateComplete;
+    const selector = this._selected ? ".detail h3" : this._pane === "setup" ? ".inspector h2" : ".search-label input";
+    (this.renderRoot.querySelector(selector) || this.renderRoot.querySelector(".inspector button"))?.focus();
   }
-
-  _computePadding() {
-    const root = this.shadowRoot?.getElementById("root");
-    const ignore =
-      this.layout === "panel" || this.layout === "grid" || this._isPanel;
-    if (!this.config || ignore || !root) return;
-    root.style.height = "auto";
-    root.style.paddingBottom = "100%";
+  _closePane() {
+    const pane = this._pane;
+    this._pane = null; this._selected = null;
+    this.renderRoot.querySelector(pane === "setup" ? ".empty .primary" : `[data-pane="${pane}"]`)?.focus();
   }
-
-  _initMap() {
-    if (this._isPreview) return;
-    if (this._map) return;
-    const container = this._ensureMapContainer();
-    if (!container) {
-      _dlog("init", "no #map container, aborting");
-      return;
-    }
-    this._mapNode = container;
-    const rect = container.getBoundingClientRect();
-    if (rect.width < MIN_SIZE_W || rect.height < MIN_SIZE_H) {
-      _dlog("init", "container too small, waiting", { w: rect.width, h: rect.height });
-      return;
-    }
-
-    if (this._resizeObserver) {
-      this._resizeObserver.disconnect();
-      this._resizeObserver = null;
-    }
-    if (this._visibilityObserver) {
-      this._visibilityObserver.disconnect();
-      this._visibilityObserver = null;
-    }
-
-    const cfg = this.config;
-    const center = cfg.center ?? this._getDefaultCenter();
-    const zoom = cfg.default_zoom || DEFAULT_ZOOM;
-    _dlog("init", "creating map", { center, zoom, size: rect });
-
-    try {
-      this._map = L.map(container, {
-        crs: L.CRS.EPSG3857,
-        center,
-        zoom,
-        zoomControl: true,
-        attributionControl: true,
-      });
-    } catch (e) {
-      this._map = null;
-      _dlog("init", "Leaflet map init failed", e);
-      this._showError(`Map init failed: ${e?.message || e}`);
-      return;
-    }
-
-    try {
-      this._addTileLayer();
-      this._map.on("resize", () => this._invalidateSize());
-      this._map.on("moveend", () => {
-        if (this._pendingRender) {
-          this._pendingRender = false;
-          this._renderMarkers();
-        }
-      });
-      this._updateMapStyle();
-    } catch (e) {
-      _dlog("init", "tile/layer setup failed", e);
-    }
-
-    try {
-      this._resizeObserver = new ResizeObserver(() => {
-        if (this._map) this._invalidateDebounced();
-      });
-      this._resizeObserver.observe(container);
-
-      this._visibilityObserver = new IntersectionObserver((entries) => {
-        if (entries[0]?.isIntersecting && this._map) {
-          this._invalidateSize();
-        }
-      });
-      this._visibilityObserver.observe(container);
-    } catch (e) {
-      _dlog("init", "observer setup failed", e);
-    }
-
-    setTimeout(() => this._invalidateSize(), 200);
-    this._renderMarkers();
+  async _select(record) {
+    this._selected = record.id;
+    await this._focusInspector();
+    if (record.mapped) this._engine?.focus(record.id, this._fitPadding());
   }
-
-  _addTileLayer() {
-    if (!this._map) return;
-    if (this._tileLayer) this._map.removeLayer(this._tileLayer);
-    // Explicit config wins; otherwise ask the integration for its shared
-    // key. Resolution is async, so the layer starts keyless (map still
-    // works, watermarked) and is rebuilt once a key arrives.
-    const explicitKey = this.config?.carto_api_key;
-    if (explicitKey) {
-      this._tileApiKey = explicitKey;
-      this._addTileLayerWithKey(explicitKey);
-      return;
-    }
-    this._addTileLayerWithKey(null);
-    if (this._tileApiKeyResolved) return;
-    fetchSharedBasemapKey(this.hass).then((key) => {
-      this._tileApiKeyResolved = true;
-      if (key && key !== this._tileApiKey && this._map) {
-        _dlog("tilekey", "applying shared basemap key");
-        this._addTileLayerWithKey(key);
-      }
-    });
+  _fitPadding() {
+    const inspector = this.renderRoot.querySelector(".inspector");
+    if (!inspector) return [64, 64, 64, 64];
+    return this.clientWidth <= 600 ? [48, 48, inspector.clientHeight + 56, 48] : [64, inspector.clientWidth + 36, 64, 64];
   }
-
-  _addTileLayerWithKey(apiKey) {
-    if (!this._map) return;
-    if (this._tileLayer) this._map.removeLayer(this._tileLayer);
-    this._tileApiKey = apiKey || null;
-    this._tileLayer = L.tileLayer(getTileUrl(apiKey), {
-      ...MAP_OPTIONS,
-      attribution: MAP_ATTR,
-    }).addTo(this._map);
+  _toggleLayer(preset, checked) {
+    this._visibility = { ...this._visibility, [preset]: checked };
+    saveVisibility(this._storage(), this._preferenceKey, this._visibility);
+    this._engine?.setTraffic(preset, checked);
   }
-
-  _showLoading(message = "Loading map...") {
-    const container = this._ensureMapContainer();
-    if (!container) return;
-    container.innerHTML = `<div class="om-loading">${esc(message)}</div>`;
+  _retry() { if (this._error) { this._resetEngine(); this._ensureEngine(); } else this._engine?.retry(); }
+  _configure() {
+    if (this._isPanel) { window.history.pushState(null, "", "/config/integrations/integration/openmap"); window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: false } })); }
+    else { this._pane = "setup"; this._focusInspector(); }
   }
+  _moreInfo(id) { this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId: id }, bubbles: true, composed: true })); }
+  _icon(icon) { return html`<ha-icon .icon=${icon} aria-hidden="true"></ha-icon>`; }
+  _button(label, icon, action, disabled = false) { return html`<button type="button" title=${label} aria-label=${label} @click=${action} ?disabled=${disabled}>${this._icon(icon)}</button>`; }
 
-  _showError(message) {
-    const container = this._ensureMapContainer();
-    if (!container) return;
-    container.innerHTML = `<div class="om-error">${esc(message)}</div>`;
+  _entityDetail(record) {
+    const popup = this._config.marker.popup;
+    const date = new Date(record.updated);
+    const updated = record.updated && Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat(this._hass.language || "en", { dateStyle: "medium", timeStyle: "short" }).format(date) : "—";
+    return html`<div class="detail"><h3 tabindex="-1">${resolveText(record.state, popup.title) || record.name}</h3>
+      ${popup.body ? html`<p class="body">${resolveText(record.state, popup.body)}</p>` : nothing}
+      <dl><dt>${this._t("state")}</dt><dd>${record.state?.state || this._t("missing")}</dd>
+        <dt>${this._t("updated")}</dt><dd>${updated}</dd>
+        ${record.accuracy ? html`<dt>${this._t("accuracy")}</dt><dd>${record.accuracy} m</dd>` : nothing}
+        ${record.zone && record.radius ? html`<dt>${this._t("zoneRadius")}</dt><dd>${record.radius} m</dd>` : nothing}
+        ${record.battery != null ? html`<dt>${this._t("battery")}</dt><dd>${String(record.battery)}%</dd>` : nothing}
+        ${popup.fields.map(f => html`<dt>${f.label}</dt><dd>${resolveText(record.state, f.value)}</dd>`)}</dl>
+      <div class="detail-actions"><button ?disabled=${!record.mapped || !this._engine} @click=${() => { this._closePane(); this._engine?.focus(record.id); }}>${this._t("show")}</button>
+        <button ?disabled=${!record.state} @click=${() => this._moreInfo(record.id)}>${this._t("details")}</button></div></div>`;
   }
-
-  _gatherEntities() {
-    const cfg = this.config;
-    const st = this.hass.states || {};
-    const entities = [];
-
-    (cfg.entities || []).forEach(e => {
-      if (typeof e === "string") {
-        const s = st[e];
-        if (s && s.state !== "unavailable" && s.state !== "unknown" && s.attributes.latitude && s.attributes.longitude) {
-          entities.push({ state: s, color: null, name: null });
-        }
-      } else if (e && e.entity) {
-        const s = st[e.entity];
-        if (s && s.state !== "unavailable" && s.state !== "unknown" && s.attributes.latitude && s.attributes.longitude) {
-          entities.push({ state: { ...s, _custom_name: e.name }, color: e.color, name: e.name });
-        }
-      }
-    });
-
-    (cfg.geo_location_sources || cfg.geolocation_sources || []).forEach(src => {
-      Object.values(st).forEach(s => {
-        if (s.entity_id.startsWith("geo_location.") && s.state !== "unavailable" && s.state !== "unknown" && s.attributes.source === src && s.attributes.latitude) {
-          entities.push({ state: s, color: null, name: null });
-        }
-      });
-    });
-
-    (cfg.include_domains || []).forEach(d => {
-      Object.values(st).forEach(s => {
-        if (s.entity_id.startsWith(d + ".") && s.state !== "unavailable" && s.state !== "unknown" && s.attributes.latitude && s.attributes.longitude) {
-          entities.push({ state: s, color: null, name: null });
-        }
-      });
-    });
-
-    return entities;
-  }
-
-  _markerLabel(state, customName, mc) {
-    const labelMode = mc.label_mode || "initials";
-    const name = customName || state.attributes.friendly_name || state.entity_id;
-    if (labelMode === "name") return name;
-    if (labelMode === "state") return state.state || "";
-    if (labelMode === "attribute") {
-      const attr = mc.attribute || mc.attr || "state";
-      const v = state.attributes?.[attr];
-      return v != null ? String(v) : "";
-    }
-    if (labelMode === "icon") return null; // icon handled separately
-    // initials (default, matches HA)
-    return name
-      .split(" ")
-      .map((part) => part[0])
-      .join("")
-      .substring(0, 3);
-  }
-
-  _markerIconHTML(state, customName, color, mc, markerSize) {
-    const labelMode = mc.label_mode || "initials";
-    let inner = "";
-    if (labelMode === "icon") {
-      const icon = state.attributes?.icon;
-      inner = icon
-        ? `<ha-icon icon="${esc(icon)}" style="--mdc-icon-size:${Math.round(markerSize / 2)}px;"></ha-icon>`
-        : this._markerLabel(state, customName, mc);
-    } else {
-      const label = this._markerLabel(state, customName, mc);
-      inner = label
-        ? `<span>${esc(label)}</span>`
-        : "";
-    }
-    const fontSize = mc.font_size || `calc(${markerSize}px * 0.42)`;
-    return `<div class="om-marker" style="--marker-size:${markerSize}px;--marker-color:${esc(color)};font-size:${esc(fontSize)};">${inner}</div>`;
-  }
-
-  _buildMarker(state, customName, color, mc) {
-    const markerSize = Number(mc.size) || 48;
-    const html = this._markerIconHTML(state, customName, color, mc, markerSize);
-    const icon = L.divIcon({
-      html,
-      className: "",
-      iconSize: [markerSize, markerSize],
-      iconAnchor: [markerSize / 2, markerSize / 2],
-      popupAnchor: [0, -markerSize / 2],
-    });
-    const marker = L.marker([Number(state.attributes.latitude), Number(state.attributes.longitude)], { icon });
-    const content = this._buildPopup(state, mc.popup || {}, color);
-    if (content) marker.bindPopup(content, { closeButton: true, className: "om-popup-container", maxWidth: 350 });
-    return marker;
-  }
-
-  _buildZone(state, color) {
-    const radius = Number(state.attributes.radius) || 100;
-    const circle = L.circle([Number(state.attributes.latitude), Number(state.attributes.longitude)], {
-      interactive: false,
-      color,
-      radius,
-    });
-    return circle;
-  }
-
-  _renderMarkers() {
-    if (!this._map || !this.hass) return;
-    // Don't rebuild mid-pan/zoom; the moveend handler will flush the pending render.
-    if (this._map._animatingZoom || this._map._moving) {
-      this._pendingRender = true;
-      return;
-    }
-    this._pendingRender = false;
-
-    if (this._markerLayer) {
-      this._map.removeLayer(this._markerLayer);
-      this._markerLayer = null;
-    }
-    if (this._circleLayer) {
-      this._map.removeLayer(this._circleLayer);
-      this._circleLayer = null;
-    }
-
-    const cfg = this.config;
-    const mc = cfg.marker || {};
-    const themeColor = getComputedStyle(this).getPropertyValue("--accent-color")?.trim() || "#03a9f4";
-    const darkPrimary = getComputedStyle(this).getPropertyValue("--dark-primary-color")?.trim() || "#2196F3";
-
-    const entities = this._gatherEntities();
-    const seen = new Set();
-    const markers = [];
-    const zones = [];
-    const rings = [];
-
-    entities.forEach(({ state, color, name }) => {
-      if (seen.has(state.entity_id)) return;
-      seen.add(state.entity_id);
-      const lat = Number(state.attributes.latitude);
-      const lon = Number(state.attributes.longitude);
-      if (!isValidCoordinate(lat, lon)) return;
-      const markerColor = resolveMarkerColor(mc, color);
-      if (state.entity_id.startsWith("zone.")) {
-        zones.push(this._buildZone(state, themeColor));
-        return;
-      }
-      markers.push(this._buildMarker(state, name, markerColor, mc));
-      // gps accuracy ring (matches HA); kept out of the cluster so it never
-      // "jumps" while the cluster forms and dissolves during pan/zoom.
-      if (state.attributes.gps_accuracy) {
-        rings.push(
-          L.circle([lat, lon], {
-            interactive: false,
-            color: darkPrimary,
-            radius: Number(state.attributes.gps_accuracy),
-          })
-        );
-      }
-    });
-
-    if (cfg.cluster !== false && markers.length) {
-      const maxClusterRadius = Number(cfg.cluster_radius) || 40;
-      this._markerLayer = L.markerClusterGroup({
-        showCoverageOnHover: false,
-        removeOutsideVisibleBounds: false,
-        maxClusterRadius,
-        iconCreateFunction: (cluster) => {
-          const count = cluster.getChildCount();
-          const cls = count < 10 ? "small" : count < 100 ? "medium" : "large";
-          return L.divIcon({
-            html: `<div><span>${count}</span></div>`,
-            className: `marker-cluster ${cls}`,
-            iconSize: L.point(40, 40),
-          });
-        },
-      });
-      this._markerLayer.addLayers(markers);
-    } else {
-      this._markerLayer = L.layerGroup(markers);
-    }
-    this._map.addLayer(this._markerLayer);
-    const circleLayers = [...zones, ...rings];
-    if (circleLayers.length) {
-      this._circleLayer = L.layerGroup(circleLayers);
-      this._circleLayer.addTo(this._map);
-    }
-  }
-
-  _buildPopup(state, pc, markerColor) {
-    const rawTitle = pc.title
-      ? this._resolveRaw(state, pc.title)
-      : state.attributes.friendly_name || state.entity_id;
-    const title = esc(rawTitle);
-    const body = pc.body ? this._resolve(state, pc.body) : "";
-    const fields = pc.fields || [];
-    const icon = state.attributes?.icon
-      ? `<ha-icon icon="${esc(state.attributes.icon)}"></ha-icon>`
-      : "";
-    const avatarInner =
-      icon ||
-      esc(
-        String(rawTitle)
-          .split(" ")
-          .map((p) => p[0])
-          .join("")
-          .substring(0, 2)
-          .toUpperCase()
-      );
-    const stateLine = state.state ? esc(String(state.state)) : "";
-    let h = '<div class="om-pop">';
-    h += '<div class="om-pop-header">';
-    h += `<span class="om-pop-avatar" style="--marker-color:${esc(markerColor || "var(--accent-color, #03a9f4)")}">${avatarInner}</span>`;
-    h += '<div class="om-pop-heading">';
-    h += `<h3>${title}</h3>`;
-    if (stateLine) h += `<div class="om-pop-sub">${stateLine}</div>`;
-    h += "</div></div>";
-    h += '<div class="om-rows">';
-    fields.forEach(f => {
-      let v = this._resolve(state, f.value || f.field || f);
-      if (v == null || v === "") return;
-      if (f.format === "number") v = esc(String(Math.round(parseFloat(v) * 100) / 100));
-      h += `<div class="om-row"><span class="om-l">${esc(f.label || f.name || f)}</span><span class="om-v">${v}</span></div>`;
-    });
-    h += "</div>";
-    if (body) h += `<div class="om-desc">${body}</div>`;
-    h += "</div>";
-    return h;
-  }
-
-  _resolveRaw(obj, expr) {
-    if (!expr || !obj) return "";
-    if (expr === "state") return String(obj.state);
-    if (typeof expr === "string" && expr.indexOf("{") >= 0)
-      return expr.replace(/\{(\w+)\}/g, (_, k) =>
-        obj.attributes && obj.attributes[k] !== undefined ? String(obj.attributes[k]) : `{${k}}`
-      );
-    if (obj.attributes && obj.attributes[expr] !== undefined) return String(obj.attributes[expr]);
-    return "";
-  }
-
-  _resolve(obj, expr) {
-    if (!expr || !obj) return "";
-    if (expr === "state") return esc(obj.state);
-    if (typeof expr === "string" && expr.indexOf("{") >= 0)
-      return expr.replace(/\{(\w+)\}/g, (_, k) => (obj.attributes && obj.attributes[k] !== undefined) ? esc(String(obj.attributes[k])) : `{${k}}`);
-    if (obj.attributes && obj.attributes[expr] !== undefined) return esc(String(obj.attributes[expr]));
-    return "";
+  _inspector() {
+    if (!this._pane) return nothing;
+    const record = this._records.find(r => r.id === this._selected);
+    const results = this._records.filter(r => `${r.name} ${r.id}`.toLocaleLowerCase().includes(this._search.toLocaleLowerCase()));
+    return html`<section class="inspector" aria-label=${this._t(this._pane === "traffic" ? "traffic" : "entities")} @keydown=${e => { if (e.key === "Escape") { e.stopPropagation(); this._closePane(); } }}>
+      <div class="inspector-header">${record ? this._button(this._t("back"), "mdi:arrow-left", () => { this._selected = null; this._focusInspector(); }) : nothing}<h2 tabindex="-1">${this._t(this._pane === "traffic" ? "traffic" : this._pane === "setup" ? "configure" : "entities")}</h2>
+        ${this._button(this._t("close"), "mdi:close", () => this._closePane())}</div>
+      <div class="inspector-content">${this._pane === "setup" ? html`<p>${this._t("dashboardHelp")}</p>` : this._pane === "traffic" ? html`
+        <p class="muted">${this._t("provider")}</p>
+        ${this._config.overlay_layers.length ? html`<div class="layer-list">${this._config.overlay_layers.map(l => html`<label class="layer"><span>${l.name}</span><span class="switch-control"><input type="checkbox" role="switch" .checked=${!!this._visibility[l.preset]} @change=${e => this._toggleLayer(l.preset, e.target.checked)}><span class="switch-track" aria-hidden="true"></span></span></label>`)}</div>
+          <p class="muted">${this._t("remembered")}</p><p class="muted">${this._t("area")}</p><p class="muted">${this._t("fetched")} ${Object.values(this._status).some(s => s.fetchedAt) ? new Intl.DateTimeFormat(this._hass.language || "en", { timeStyle:"short", dateStyle:"medium" }).format(new Date(Math.max(...Object.values(this._status).map(s => s.fetchedAt || 0)) * 1000)) : this._t("notFetched")}</p><button class="text-action" ?disabled=${!this._engine} @click=${() => this._engine?.focusTraffic(this._fitPadding())}>${this._t("focusTraffic")}</button>` : html`<p>${this._t("noTraffic")}</p>`}
+      ` : html`
+        ${record ? this._entityDetail(record) : html`<label class="search-label">${this._t("search")}<input type="search" .value=${this._search} @input=${e => { this._search = e.target.value; }}></label>
+          <p class="muted count">${this._t("count", { mapped: this._records.filter(r => r.mapped).length, total: this._records.length })}</p>
+          ${this._records.total > 500 ? html`<p role="status">${this._t("limit")}</p>` : nothing}
+          ${results.length ? html`<ul class="entity-list">${repeat(results, r => r.id, r => html`<li><button class="entity" @click=${() => this._select(r)}>
+            ${this._icon(/^mdi:[\w-]+$/.test(r.state?.attributes?.icon || "") ? r.state.attributes.icon : r.zone ? "mdi:map-marker-radius" : "mdi:map-marker")}
+            <span><strong>${r.name}</strong><small>${!r.state ? this._t("missing") : !r.available ? this._t("unavailable") : !r.mapped ? this._t("noLocation") : r.state.state}</small></span>
+            ${this._icon("mdi:chevron-right")}</button></li>`)}</ul>` : html`<p>${this._t(this._records.length ? "noMatches" : "noEntities")}</p>`}`}
+      `}</div></section>`;
   }
 
   render() {
-    if (this._isPreview) {
-      return html`<div class="om-preview">Open Map</div>`;
-    }
-    const cfg = this.config;
-    const isPanel = this._isPanel || this.layout === "panel";
-    const entityCount = this._countEntities();
-    const btnColor = this._darkMode ? "#ffffff" : "#000000";
-    const controls = html`
-      <div id="buttons">
-        ${entityCount > 1
-          ? html`
-              <button
-                class="om-map-btn"
-                style="color:${btnColor}"
-                title="Toggle grouping"
-                @click=${this._toggleCluster}
-              >
-                <ha-icon
-                  icon=${this.config.cluster !== false
-                    ? "mdi:google-circles-communities"
-                    : "mdi:dots-hexagon"}
-                ></ha-icon>
-              </button>
-            `
-          : nothing}
-        <button
-          class="om-map-btn"
-          style="color:${btnColor}"
-          title="Reset focus"
-          @click=${this._fitToFocus}
-        >
-          <ha-icon icon="mdi:image-filter-center-focus"></ha-icon>
-        </button>
-      </div>
-    `;
-    if (isPanel) {
-      // Fullscreen panel: app bar keeps the hamburger visible on mobile so
-      // the sidebar drawer can be opened (the only way out of the panel).
-      // Mirrors HA's own map panel; hamburger fires "hass-toggle-menu",
-      // which home-assistant-main handles. Cluster/reset float below the
-      // Leaflet zoom control, like HA's card-side buttons.
-      return html`
-        <div class="om-panel">
-          <header class="om-appbar">
-            ${this._narrow
-              ? html`
-                  <ha-icon-button
-                    class="om-menu-btn"
-                    label="Toggle sidebar"
-                    @click=${this._toggleSidebar}
-                  >
-                    <ha-icon icon="mdi:menu"></ha-icon>
-                  </ha-icon-button>
-                `
-              : nothing}
-            <span class="om-appbar-title">${cfg.title || "Open Map"}</span>
-          </header>
-          <div id="root">${controls}</div>
-        </div>
-      `;
-    }
-    return html`
-      <ha-card>
-        ${cfg.title ? html`<h1 class="card-header">${cfg.title}</h1>` : nothing}
-        <div id="root">${controls}</div>
-        ${cfg.attribution ? html`<div class="om-att">${cfg.attribution}</div>` : nothing}
-      </ha-card>
-    `;
-  }
-
-  _toggleSidebar() {
-    // Same mechanism as HA's ha-menu-button; handled by home-assistant-main
-    // to open the sidebar drawer on narrow viewports.
-    this.dispatchEvent(
-      new Event("hass-toggle-menu", { bubbles: true, composed: true })
-    );
+    if (!this._config) return nothing;
+    const content = this._hasContent();
+    const baseError = this._status.basemap?.error;
+    const trafficError = Object.entries(this._status).some(([id, state]) => id !== "basemap" && this._visibility[id] && state.error);
+    const loading = this._starting || Object.values(this._status).some(state => state.loading > 0);
+    return html`<ha-card><header class="toolbar">
+      ${this._isPanel ? this._button("Menu", "mdi:menu", () => this.dispatchEvent(new CustomEvent("hass-toggle-menu", { bubbles: true, composed: true }))) : nothing}
+      <h1>${this._config.title}</h1><nav aria-label="Map content">
+        <button data-pane="entities" aria-expanded=${this._pane === "entities"} @click=${() => this._togglePane("entities")}>${this._icon("mdi:account-multiple-outline")}${this._t("entities")}</button>
+        <button data-pane="traffic" aria-expanded=${this._pane === "traffic"} @click=${() => this._togglePane("traffic")}>${this._icon("mdi:layers-outline")}${this._t("traffic")}</button></nav></header>
+      ${this._error || baseError || trafficError || this._keyWarning ? html`<div class="notice" role="status"><span>${this._t(this._error ? "mapError" : baseError ? "baseError" : trafficError ? "trafficError" : "noKey")}</span>
+        ${this._keyWarning && !this._error && !baseError && !trafficError ? nothing : html`<button @click=${() => this._retry()}>${this._t("retry")}</button>`}</div>` : nothing}
+      <div class="workspace">
+        <div id="map" role="region" aria-label=${this._config.title} tabindex="0"></div>
+        ${content ? html`<div class="map-actions">
+          ${this._button(this._t("zoomIn"), "mdi:plus", () => this._engine?.zoom(1), !this._engine)}
+          ${this._button(this._t("zoomOut"), "mdi:minus", () => this._engine?.zoom(-1), !this._engine)}
+          ${this._button(this._t("fit"), "mdi:fit-to-screen-outline", () => this._engine?.fit(), !this._engine || !this._records.some(r => r.mapped))}</div>` : html`
+          <div class="empty"><h2>${this._t("empty")}</h2><p>${this._t("emptyBody")}</p><button class="primary" @click=${() => this._configure()}>${this._t("configure")}</button></div>`}
+        ${this._inspector()}
+        ${loading ? html`<div class="loading" role="status">${this._t("loading")}</div>` : nothing}
+        ${content ? html`<footer class="attribution"><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">© OpenStreetMap contributors</a>
+          ${this._config.basemap === "carto" && !this._keyWarning ? html` · <a href="https://carto.com/attributions" target="_blank" rel="noopener noreferrer">© CARTO</a>` : nothing}
+          ${this._config.overlay_layers.some(l => this._visibility[l.preset]) ? html` · <a href="https://logis2.ludwigsburg.de/tbview2/" target="_blank" rel="noopener noreferrer">Stadt Ludwigsburg</a>` : nothing}
+          ${this._config.attribution ? html` · ${this._config.attribution}` : nothing}</footer>` : nothing}
+      </div></ha-card>`;
   }
 
   static styles = css`
-    :host {
-      display: block;
-      width: 100%;
-      height: 100%;
-      box-sizing: border-box;
-    }
-    /* Panel mode: size to the viewport instead of the host chain. The panel
-       is registered with handle_safe_area so we apply the insets ourselves
-       (ha-panel-custom's own safe-area padding would double them). The app
-       bar takes the top inset itself, matching HA's ha-top-app-bar-fixed. */
-    :host(.panel-mode) {
-      height: 100vh;
-      height: 100dvh;
-    }
-    .om-panel {
-      display: flex;
-      flex-direction: column;
-      width: 100%;
-      height: 100%;
-    }
-    .om-appbar {
-      box-sizing: border-box;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      width: 100%;
-      height: var(--header-height, 56px);
-      flex: none;
-      padding-top: var(--safe-area-inset-top, 0px);
-      padding-left: var(--safe-area-inset-left, 0px);
-      padding-right: var(--safe-area-inset-right, 0px);
-      color: var(--app-header-text-color, var(--text-primary-color, #fff));
-      background-color: var(
-        --app-header-background-color,
-        var(--primary-color)
-      );
-      z-index: 4;
-    }
-    .om-appbar-title {
-      flex: 1 1 auto;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-size: var(--ha-font-size-xl, 20px);
-      padding-inline-start: 8px;
-    }
-    .om-appbar ha-icon-button {
-      color: inherit;
-      --mdc-icon-size: 24px;
-    }
-    ha-card {
-      width: 100%;
-      height: 100%;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-    #root {
-      position: relative;
-      height: 100%;
-      flex: 1 1 auto;
-      overflow: hidden;
-      /* Never render a zero-height (blank/black) card if a host layout
-         collapses: Leaflet refuses to init below these bounds. */
-      min-height: 200px;
-    }
-    /* Panel: root fills the space below the app bar and keeps the bottom
-       inset clear (the bar owns the top inset). */
-    .om-panel #root {
-      height: auto;
-      padding-bottom: var(--safe-area-inset-bottom, 0px);
-    }
-    #map {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      border-radius: var(--ha-card-border-radius, var(--ha-border-radius-lg));
-      overflow: hidden;
-      z-index: 0;
-      background: #ddd;
-    }
-    /* Critical subset of leaflet.css for Shadow DOM */
-    #map .leaflet-pane,
-    #map .leaflet-tile,
-    #map .leaflet-marker-icon,
-    #map .leaflet-marker-shadow,
-    #map .leaflet-tile-container,
-    #map .leaflet-pane > svg,
-    #map .leaflet-pane > canvas,
-    #map .leaflet-zoom-box,
-    #map .leaflet-image-layer,
-    #map .leaflet-layer {
-      position: absolute;
-      left: 0;
-      top: 0;
-    }
-    #map .leaflet-container { overflow: hidden; }
-    #map .leaflet-pane { z-index: 0 !important; }
-    #map .leaflet-tile-pane    { z-index: 2; }
-    #map .leaflet-overlay-pane { z-index: 4; pointer-events: none; }
-    #map .leaflet-shadow-pane  { z-index: 5; }
-    #map .leaflet-marker-pane  { z-index: 6; }
-    #map .leaflet-tooltip-pane { z-index: 7; }
-    #map .leaflet-popup-pane   { z-index: 8; }
-    #map .leaflet-control,
-    #map .leaflet-top,
-    #map .leaflet-bottom {
-      z-index: 1 !important;
-      pointer-events: auto;
-      position: absolute;
-    }
-    #map .leaflet-top { top: 0; }
-    #map .leaflet-right { right: 0; }
-    #map .leaflet-bottom { bottom: 0; }
-    #map .leaflet-left { left: 0; }
-    #map .leaflet-control { float: left; clear: both; }
-    #map .leaflet-right .leaflet-control { float: right; }
-    #map .leaflet-top .leaflet-control { margin-top: 10px; }
-    #map .leaflet-bottom .leaflet-control { margin-bottom: 0; }
-    #map .leaflet-left .leaflet-control { margin-left: 10px; }
-    #map .leaflet-right .leaflet-control { margin-right: 0; }
-    #map .leaflet-control-attribution {
-      background: rgba(255, 255, 255, 0.85);
-      margin: 0;
-      padding: 0 5px;
-      color: #333;
-      font: 11px/1.5 "Helvetica Neue", Arial, Helvetica, sans-serif;
-      box-sizing: border-box;
-    }
-    #map .leaflet-control-attribution a { text-decoration: none; color: #0078A8; }
-    #map .leaflet-control-attribution a:hover { text-decoration: underline; }
-    /* Zoom bar styled like HA's map: Leaflet-default 26px links with a
-       semi-transparent border and rounded corners on the control. */
-    #map .leaflet-control-zoom {
-      border: 1px solid rgba(0, 0, 0, 0.2);
-      border-radius: 4px;
-    }
-    #map .leaflet-control-zoom a {
-      background-color: rgba(255, 255, 255, 0.85);
-      border-bottom: 1px solid #ccc;
-      width: 26px;
-      height: 26px;
-      line-height: 26px;
-      display: block;
-      text-align: center;
-      text-decoration: none;
-      color: black;
-      font: bold 19px "Helvetica Neue", Arial, Helvetica, sans-serif;
-    }
-    #map .leaflet-control-zoom a:hover { background-color: #fff; }
-    #map .leaflet-control-zoom a:last-child {
-      border-bottom: none;
-    }
-    #map.panel {
-      border-radius: 0;
-    }
-    /* Floating side buttons (panel: below the zoom control; card: below the
-       zoom control as well). Zoom bar: 28px wide at Leaflet's 10px margin →
-       center at 24px; a 32px button centers there with left = 8px. Bar
-       bottom sits at 64px (10px margin + two 26px links + border), so
-       top = 68px keeps the same 4px gap used between buttons. */
-    #buttons {
-      position: absolute;
-      top: 68px;
-      left: 8px;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      z-index: 1001;
-    }
-    .om-map-btn {
-      width: 32px;
-      height: 32px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.1));
-      border-radius: 4px;
-      background: var(--card-background-color, rgba(255, 255, 255, 0.9));
-      color: var(--primary-text-color);
-      cursor: pointer;
-      padding: 0;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-    }
-    .om-map-btn:hover {
-      background: var(--secondary-background-color, #fff);
-    }
-    .om-map-btn ha-icon {
-      --mdc-icon-size: 20px;
-    }
-    #map .leaflet-tooltip {
-      padding: 8px;
-      font-size: var(--ha-font-size-s);
-      background: rgba(80, 80, 80, 0.9) !important;
-      color: white !important;
-      border-radius: var(--ha-border-radius-sm);
-      box-shadow: none !important;
-      text-align: center;
-    }
-
-    /* --- Dark mode: CSS filter over the SAME CARTO tiles (matches HA) --- */
-    #map .leaflet-tile-pane {
-      filter: var(--map-filter);
-    }
-    #map.dark {
-      background: #090909;
-    }
-    #map.forced-dark {
-      color: #ffffff;
-      --map-filter: invert(0.9) hue-rotate(170deg) brightness(1.5) contrast(1.2) saturate(0.3);
-    }
-    #map.forced-light {
-      background: #ffffff;
-      color: #000000;
-      --map-filter: invert(0);
-    }
-    #map.dark .leaflet-bar a {
-      background-color: #1c1c1c;
-      color: #ffffff;
-    }
-    #map.dark .leaflet-bar a:hover {
-      background-color: #313131;
-    }
-    #map.dark .leaflet-control-attribution {
-      background: rgba(28, 28, 28, 0.85);
-      color: #ffffff;
-    }
-    #map.dark .leaflet-control-attribution a { color: #81d4fa; }
-
-    /* --- HA-style circular markers (customizable) --- */
-    .om-marker {
-      display: flex;
-      justify-content: center;
-      text-align: center;
-      align-items: center;
-      box-sizing: border-box;
-      width: var(--marker-size, 48px);
-      height: var(--marker-size, 48px);
-      font-weight: 500;
-      border-radius: 50%;
-      border: 1px solid var(--marker-color, var(--primary-color));
-      color: var(--primary-text-color);
-      background-color: var(--card-background-color);
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-    }
-
-    /* --- Cluster styling (matches HA) --- */
-    .marker-cluster div {
-      background-clip: padding-box;
-      background-color: var(--primary-color);
-      border: 3px solid rgba(var(--rgb-primary-color), 0.2);
-      width: calc(var(--ha-marker-size, 48px) * 0.667);
-      height: calc(var(--ha-marker-size, 48px) * 0.667);
-      border-radius: 50%;
-      text-align: center;
-      align-content: center;
-      color: var(--text-primary-color);
-      font-size: var(--ha-font-size-m);
-    }
-    .marker-cluster span {
-      line-height: var(--ha-line-height-expanded);
-    }
-
-    .om-att {
-      font-size: 10px;
-      color: var(--secondary-text-color, #999);
-      padding: 4px 8px;
-      text-align: right;
-    }
-    .om-pop {
-      font-family: var(--primary-font-family, Roboto, sans-serif);
-      color: var(--primary-text-color, #212121);
-      min-width: 200px;
-      max-width: 300px;
-    }
-    .om-pop-header {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 12px;
-      padding-right: 24px;
-    }
-    .om-pop-avatar {
-      width: 40px;
-      height: 40px;
-      border-radius: 50%;
-      background: var(--marker-color, var(--accent-color, #03a9f4));
-      color: #fff;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-      font-size: 14px;
-      font-weight: 600;
-      letter-spacing: 0.02em;
-      --mdc-icon-size: 22px;
-      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
-    }
-    .om-pop-heading { min-width: 0; }
-    .om-pop-heading h3 {
-      font-size: 14px;
-      font-weight: 500;
-      margin: 0;
-      line-height: 1.3;
-      overflow-wrap: anywhere;
-    }
-    .om-pop-sub {
-      font-size: 12px;
-      color: var(--secondary-text-color, #888);
-      margin-top: 2px;
-      overflow-wrap: anywhere;
-    }
-    .om-rows {
-      display: flex;
-      flex-direction: column;
-      border-top: 1px solid var(--divider-color, #eee);
-    }
-    .om-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      gap: 12px;
-      padding: 6px 0;
-      font-size: 13px;
-    }
-    .om-row + .om-row { border-top: 1px solid var(--divider-color, #eee); }
-    .om-l { color: var(--secondary-text-color, #888); flex-shrink: 0; }
-    .om-v { text-align: right; font-weight: 500; overflow-wrap: anywhere; }
-    .om-desc {
-      margin-top: 10px;
-      font-size: 12px;
-      line-height: 1.4;
-      padding: 8px 10px;
-      background: var(--secondary-background-color, #f5f5f5);
-      border: 1px solid var(--divider-color, #eee);
-      border-radius: 10px;
-    }
-    /* Leaflet popup shell styled as an HA card. */
-    #map .leaflet-popup-content-wrapper.om-popup-container,
-    #map .leaflet-popup-tip {
-      background: var(--ha-card-background, var(--card-background-color, #fff));
-      color: var(--primary-text-color, #212121);
-    }
-    #map .leaflet-popup-content-wrapper.om-popup-container {
-      border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
-      border-radius: var(--ha-card-border-radius, 16px);
-      box-shadow: var(--ha-card-box-shadow, 0 2px 8px rgba(0, 0, 0, 0.2));
-      overflow: hidden;
-    }
-    #map .leaflet-popup-tip {
-      box-shadow: none;
-    }
-    #map .om-popup-container .leaflet-popup-content {
-      margin: 14px 16px;
-      line-height: 1.4;
-    }
-    #map .leaflet-popup-close-button {
-      color: var(--secondary-text-color, #888);
-      font-size: 18px;
-      width: 26px;
-      height: 26px;
-      line-height: 26px;
-      text-align: center;
-      border-radius: 50%;
-      z-index: 1;
-      transition: color 0.15s, background-color 0.15s;
-    }
-    #map .leaflet-popup-close-button:hover {
-      color: var(--primary-text-color, #212121);
-      background: var(--divider-color, rgba(0, 0, 0, 0.08));
-    }
-    .om-loading {
-      padding: 16px;
-      color: var(--secondary-text-color, #888);
-      text-align: center;
-      font-family: var(--primary-font-family, Roboto, sans-serif);
-    }
-    .om-error {
-      padding: 16px;
-      color: var(--error-color, #d32f2f);
-      text-align: center;
-      font-family: var(--primary-font-family, Roboto, sans-serif);
-    }
-    .om-preview {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 100%;
-      height: 100%;
-      min-height: 200px;
-      color: var(--secondary-text-color, #666);
-      font-size: 14px;
-    }
+    :host { display:block; height:100%; min-height:360px; color:var(--primary-text-color,#212121); --om-surface:var(--ha-card-background,var(--card-background-color,#fff)); --om-muted:var(--secondary-text-color,#555); --om-accent:var(--primary-color,#1976d2); font-family:var(--ha-font-family-body,Roboto,sans-serif); container-type:inline-size; }
+    * { box-sizing:border-box; } ha-card { display:flex; flex-direction:column; height:100%; min-height:420px; overflow:hidden; }
+    :host(.panel-mode) { height:100dvh; padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+    :host(.panel-mode) ha-card { border:0; border-radius:0; min-height:0; }
+    .toolbar { display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--om-surface); border-bottom:1px solid var(--divider-color,#ddd); z-index:2; flex-wrap:wrap; }
+    h1 { font-size:20px; font-weight:500; margin:0; flex:1; overflow-wrap:anywhere; min-width:100px; } nav { display:flex; gap:4px; } nav button { gap:8px; padding:0 12px; }
+    button { display:inline-flex; align-items:center; justify-content:center; min-height:48px; min-width:48px; background:transparent; border:0; border-radius:var(--ha-border-radius-md,8px); color:inherit; font:inherit; cursor:pointer; padding:8px 12px; }
+    button:hover:not(:disabled), button[aria-expanded="true"] { background:var(--secondary-background-color,#edf1f4); color:var(--primary-text-color,#212121); }
+    button[aria-expanded="true"] ha-icon { color:var(--om-accent); }
+    button:disabled { opacity:.45; cursor:default; } button:focus-visible, input:focus-visible, #map:focus-visible, a:focus-visible, .detail h3:focus-visible, .inspector h2:focus-visible { outline:3px solid var(--om-accent); outline-offset:-3px; }
+    ha-icon { flex-shrink:0; width:24px; height:24px; --mdc-icon-size:24px; }
+    .workspace { position:relative; flex:1; min-height:340px; background:var(--secondary-background-color,#edf1f4); overflow:hidden; } #map { position:absolute; inset:0; } .ol-viewport { touch-action:none; } .ol-unselectable { user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent; }
+    .map-actions { position:absolute; top:12px; left:12px; display:flex; flex-direction:column; padding:4px; border-radius:12px; background:var(--om-surface); box-shadow:0 2px 8px #0003; }
+    .empty { position:absolute; inset:0; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:32px; text-align:center; }
+    h2 { font-size:20px; font-weight:500; margin:0; line-height:1.35; overflow-wrap:anywhere; } p { font-size:14px; line-height:1.5; margin:12px 0; max-width:65ch; overflow-wrap:anywhere; }
+    .primary { background:var(--om-accent); color:var(--text-primary-color,#fff); margin-top:8px; } .primary:hover:not(:disabled) { background:var(--om-accent); color:var(--text-primary-color,#fff); filter:brightness(.92); }
+    .inspector { position:absolute; top:12px; right:12px; bottom:42px; width:min(340px,calc(100% - 96px)); background:var(--om-surface); border-radius:12px; box-shadow:0 4px 16px #0003; display:flex; flex-direction:column; z-index:3; }
+    .inspector-header { display:flex; align-items:center; justify-content:space-between; padding:8px 8px 8px 16px; border-bottom:1px solid var(--divider-color,#ddd); gap:8px; } .inspector-header h2 { flex:1; }
+    .inspector-content { overflow:auto; padding:16px; overscroll-behavior:contain; scrollbar-color:var(--om-muted) var(--om-surface); scrollbar-width:thin; }
+    .muted { color:var(--om-muted); } .count { margin:12px 0 8px; font-variant-numeric:tabular-nums; }
+    .search-label { font-size:14px; display:block; } input[type="search"] { display:block; width:100%; min-height:48px; margin-top:8px; padding:10px 12px; font:inherit; color:inherit; background:var(--secondary-background-color,#edf1f4); border:1px solid var(--divider-color,#bbb); border-radius:8px; caret-color:var(--om-accent); }
+    .entity-list { list-style:none; padding:0; margin:0 -8px; } .entity { text-align:left; justify-content:flex-start; width:100%; gap:12px; min-height:64px; padding:8px; } .entity span { flex:1; min-width:0; }
+    .entity strong { font-size:14px; font-weight:500; display:block; overflow-wrap:anywhere; } .entity small { display:block; font-size:13px; color:var(--om-muted); margin-top:4px; overflow-wrap:anywhere; }
+    .layer { display:flex; align-items:center; gap:16px; min-height:56px; cursor:pointer; border-bottom:1px solid var(--divider-color,#ddd); } .layer > span:first-child { flex:1; overflow-wrap:anywhere; }
+    .switch-control { position:relative; width:48px; height:48px; flex-shrink:0; } input[type="checkbox"] { position:absolute; inset:0; width:48px; height:48px; margin:0; opacity:0; cursor:pointer; }
+    .switch-track { display:block; position:absolute; left:2px; right:2px; top:12px; height:24px; border-radius:12px; background:var(--om-muted); pointer-events:none; }
+    .switch-track::after { content:""; display:block; width:18px; height:18px; border-radius:50%; background:var(--om-surface); position:absolute; top:3px; left:3px; }
+    input:checked + .switch-track { background:var(--om-accent); } input:checked + .switch-track::after { left:23px; } input:focus-visible + .switch-track { outline:3px solid var(--om-accent); outline-offset:3px; }
+    h3 { font-size:18px; line-height:1.4; margin:0 0 16px; overflow-wrap:anywhere; } dl { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.3fr); gap:12px; font-size:14px; } dt { color:var(--om-muted); } dd { margin:0; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; } .body { white-space:pre-wrap; }
+    .detail-actions { display:flex; flex-wrap:wrap; gap:4px; margin-top:24px; } .detail-actions button, .text-action { color:var(--om-accent); }
+    .notice { background:var(--om-surface); padding:8px 12px; border-bottom:1px solid var(--divider-color,#ddd); display:flex; gap:12px; align-items:center; font-size:14px; }
+    .notice span { flex:1; overflow-wrap:anywhere; } .notice button { color:var(--om-accent); flex-shrink:0; } .loading { position:absolute; left:12px; bottom:42px; border-radius:8px; padding:8px 12px; background:var(--om-surface); font-size:14px; pointer-events:none; }
+    .attribution { position:absolute; bottom:0; left:0; right:0; background:var(--om-surface); color:var(--om-muted); padding:6px 12px; font-size:11px; line-height:1.4; max-height:36px; overflow:auto; scrollbar-width:thin; } a { color:inherit; text-underline-offset:3px; }
+    ::selection { background:var(--om-accent); color:var(--text-primary-color,#fff); }
+    @container (max-width:600px) { .toolbar { gap:4px; padding:8px; } h1 { font-size:18px; } nav { width:100%; } nav button { flex:1; } .map-actions { flex-direction:row; } .inspector { top:auto; left:8px; right:8px; bottom:42px; width:auto; max-height:60%; } .inspector-content { padding:12px 16px; } .empty { padding:24px; } .notice { bottom:42px; font-size:13px; } }
+    @media (prefers-reduced-motion:no-preference) { .inspector { animation:arrive 160ms cubic-bezier(.16,1,.3,1); } @keyframes arrive { from { transform:translateY(8px); } to { transform:translateY(0); } } }
   `;
 }
 
-if (!customElements.get("openmap-card")) {
-  customElements.define("openmap-card", OpenmapCard);
-} else {
-  _dwarn(
-    "define",
-    "openmap-card already defined by another script (possible stale HACS resource). " +
-    "Remove old openmap resources from Lovelace."
-  );
-}
-
+if (!customElements.get("openmap-card")) customElements.define("openmap-card", OpenmapCard);
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "openmap-card",
-  name: "Open Map Card",
-  description: "Extensible replacement for the built-in Home Assistant map card",
-  preview: false,
-  documentationURL: "https://github.com/jrmbchtl/openmap",
-});
-
-export { OpenmapCard };
+if (!window.customCards.some(card => card.type === "openmap-card")) window.customCards.push({ type: "openmap-card", name: "Open Map", description: "Entities and Ludwigsburg traffic on one map", preview: true });
+console.info(`Open Map ${VERSION}`);

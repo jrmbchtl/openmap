@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from homeassistant.components.http import KEY_HASS
 from homeassistant.core import HomeAssistant
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.openmap.const import DOMAIN
 from custom_components.openmap.http import CartoApiKeyView, async_register_http_views
@@ -103,10 +103,8 @@ async def test_view_url_and_auth_attributes() -> None:
     assert view.requires_auth is True
 
 
-async def test_panel_receives_key_via_options(
-    hass: HomeAssistant, mock_config_entry
-) -> None:
-    """The configured key propagates into the sidebar panel config."""
+async def test_panel_does_not_embed_key(hass: HomeAssistant, mock_config_entry) -> None:
+    """The key stays in the authenticated endpoint, not public panel metadata."""
     from custom_components.openmap import PANEL_URL_PATH, _panel_config_from_entry
 
     hass.config_entries.async_update_entry(
@@ -117,14 +115,14 @@ async def test_panel_receives_key_via_options(
     await hass.async_block_till_done()
 
     panel = hass.data["frontend_panels"][PANEL_URL_PATH]
-    assert panel.config["carto_api_key"] == "panelkey"
-    assert _panel_config_from_entry(mock_config_entry)["carto_api_key"] == "panelkey"
+    assert "carto_api_key" not in panel.config
+    assert "carto_api_key" not in _panel_config_from_entry(mock_config_entry)
 
     # Sanity: static path registration stays mocked in this environment.
-    with patch.object(
-        type(hass.http), "async_register_static_paths"
-    ) as spy:
+    with patch.object(type(hass.http), "async_register_static_paths") as spy:
         assert await hass.config_entries.async_reload(mock_config_entry.entry_id)
         await hass.async_block_till_done()
-        assert panel.config["carto_api_key"] == "panelkey"
+        assert (
+            "carto_api_key" not in hass.data["frontend_panels"][PANEL_URL_PATH].config
+        )
         spy.assert_not_called()
