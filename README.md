@@ -115,6 +115,11 @@ cancels it when layers are hidden or the card disconnects.
 
 OpenStreetMap is the default. Its raster does not change with HA dark mode;
 the surrounding controls do. Respect the [OSM tile usage policy](https://operations.osmfoundation.org/policies/tiles/).
+OSM tiles load directly in the browser with its normal User-Agent and HTTP cache.
+An image-only `strict-origin-when-cross-origin` policy sends the HA origin as the
+required Referer, overriding HA's default `no-referrer` only for OSM images.
+Dashboard paths, query parameters and fragments are not sent. Open Map does not
+prefetch offline tiles, proxy OSM requests or bypass provider blocks.
 CARTO is optional: select `basemap: carto`, then configure a **restricted,
 browser-visible tile key** in the integration’s Configure dialog. Check
 [CARTO’s current terms](https://carto.com/basemaps/) for eligibility and limits.
@@ -124,8 +129,10 @@ key-required notice tiles.
 The authenticated key endpoint is `no-store`; keys are absent from public panel
 metadata and preference storage. A client tile key is **not a private API secret**:
 it is necessarily visible to an authorized browser and the tile provider.
-Basemap providers receive your IP and requested tile area. Traffic requests pass
-through HA; the geoportal sees HA’s network address and requested local grid.
+Basemap providers receive your IP and requested tile area; OSM also receives the
+HA origin (scheme, hostname and port). CARTO images retain `no-referrer`.
+Traffic requests pass through HA; the geoportal sees HA’s network address and
+requested local grid.
 No analytics or entity data are sent to Open Map servers.
 
 ## Migration from 0.3 / 0.4
@@ -151,7 +158,8 @@ Back up your dashboard YAML before upgrading.
 - All six inherited Ludwigsburg presets are retained. The unauthenticated old
   WMS proxy is removed. Third-party callers must not rely on the old route.
 - Install all generated chunks and restart HA. The integration serves them from
-  `/openmap/static/v1.0.0/`; stale duplicate resource registrations must be removed.
+  `/openmap/static/v<integration-version>/`; stale duplicate resource
+  registrations must be removed.
 
 ## Development and verification
 

@@ -1,4 +1,4 @@
-export const VERSION = "1.0.0";
+export const VERSION = "1.0.1";
 export const PRESETS = Object.freeze({
   baustellen: "Baustellen", radverkehr: "Radverkehr", parken: "Parken",
   bus: "Bus", winterdienst: "Winterdienst", eladestationen: "E-Ladestationen",

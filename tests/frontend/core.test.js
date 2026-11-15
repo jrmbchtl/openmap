@@ -1,10 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeConfig, retainEntries } from "../../custom_components/openmap/frontend/src/config.js";
+import { normalizeConfig, retainEntries, VERSION } from "../../custom_components/openmap/frontend/src/config.js";
 import { selectRecords, resolveText } from "../../custom_components/openmap/frontend/src/entities.js";
 import { preferenceKey, readVisibility, saveVisibility } from "../../custom_components/openmap/frontend/src/preferences.js";
 import { TileLoader } from "../../custom_components/openmap/frontend/src/tile-loader.js";
 import { readFileSync } from "node:fs";
+
+test("frontend version matches integration cache namespace and package metadata", () => {
+  for (const path of ["custom_components/openmap/manifest.json", "package.json", "package-lock.json"]) {
+    assert.equal(JSON.parse(readFileSync(path)).version, VERSION);
+  }
+  assert.equal(JSON.parse(readFileSync("package-lock.json")).packages[""].version, VERSION);
+});
 
 for (const [index, fixture] of JSON.parse(readFileSync("tests/config_contract.json")).entries()) {
   test(`shared configuration contract ${index}`, () => {

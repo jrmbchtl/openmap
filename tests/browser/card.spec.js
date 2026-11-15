@@ -1,13 +1,14 @@
 import { test, expect } from "@playwright/test";
 
-async function open(page) {
+async function open(page, path = "/tests/browser/card.html") {
   await page.route("https://tile.openstreetmap.org/**", async route => {
     const response = await page.request.get("http://127.0.0.1:8765/basemap/test.png");
     await route.fulfill({ response, headers: { "Content-Type": "image/png", "Access-Control-Allow-Origin": "*" } });
   });
-  await page.goto("/tests/browser/card.html");
+  const response = await page.goto(path);
   await page.waitForFunction(() => !!window.card?._engine);
   await expect.poll(() => page.evaluate(() => window.card._engine.features.size)).toBe(3);
+  return response;
 }
 
 async function settleMap(page) {
@@ -23,6 +24,56 @@ async function settleMap(page) {
     await new Promise(resolve => requestAnimationFrame(resolve));
   });
 }
+
+test("basemap requests identify OSM with origin-only referrers under HA headers", async ({ page }) => {
+  const osm = [], carto = [];
+  page.on("request", request => {
+    if (request.url().startsWith("https://tile.openstreetmap.org/")) osm.push(request);
+    if (request.url().startsWith("https://a.basemaps.cartocdn.com/")) carto.push(request);
+  });
+  const response = await open(page, "/tests/browser/card.html?dashboard=private&token=fixture-only#household");
+  expect(response.headers()["referrer-policy"]).toBe("no-referrer");
+  const origin = `${new URL(response.url()).origin}/`;
+  const userAgent = await page.evaluate(() => navigator.userAgent);
+  const assertOsm = async () => {
+    await expect.poll(() => osm.length).toBeGreaterThan(0);
+    await settleMap(page);
+    for (const request of osm) {
+      const headers = await request.allHeaders();
+      expect(headers.referer).toBe(origin);
+      expect(headers["user-agent"]).toBe(userAgent);
+      expect(headers.authorization).toBeUndefined();
+      expect(headers.cookie).toBeUndefined();
+      expect(headers["cache-control"]).toBeUndefined();
+      expect(headers.pragma).toBeUndefined();
+      expect(new URL(request.url()).search).toBe("");
+    }
+  };
+  await assertOsm();
+
+  // Missing CARTO credentials fall back to OSM with the same provider policy.
+  await page.route("**/api/openmap/basemap_key", route => route.fulfill({ status: 404 }));
+  osm.length = 0;
+  // A different synthetic zoom avoids browser image reuse hiding wire headers.
+  await page.evaluate(() => window.card.setConfig({ ...window.card._config, basemap: "carto", default_zoom: 13 }));
+  await page.waitForFunction(() => window.card._engine && window.card._keyWarning);
+  await assertOsm();
+  expect(carto).toHaveLength(0);
+
+  // A configured CARTO key must not widen that provider's existing policy.
+  await page.unroute("**/api/openmap/basemap_key");
+  await page.route("**/api/openmap/basemap_key", route => route.fulfill({
+    status: 200, contentType: "application/json", body: '{"carto_api_key":"fixture-carto-key"}',
+  }));
+  await page.route("https://a.basemaps.cartocdn.com/**", async route => {
+    const tile = await page.request.get("http://127.0.0.1:8765/basemap/test.png");
+    await route.fulfill({ response: tile, headers: { "Content-Type": "image/png", "Access-Control-Allow-Origin": "*" } });
+  });
+  await page.evaluate(() => window.card.setConfig({ ...window.card._config, basemap: "carto" }));
+  await expect.poll(() => carto.length).toBeGreaterThan(0);
+  await settleMap(page);
+  for (const request of carto) expect((await request.allHeaders()).referer).toBeUndefined();
+});
 
 test("production renderer, authenticated rasters, remembered layers and safe details", async ({ page }, testInfo) => {
   const errors = []; const traffic = [];

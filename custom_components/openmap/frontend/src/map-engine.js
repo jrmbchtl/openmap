@@ -32,9 +32,12 @@ export class MapEngine {
     this.rings = new VectorSource({ wrapX: false });
     this.cluster = new Cluster({ distance: 48, minDistance: 16, source: this.points, wrapX: false });
     this.clusterStyles = new globalThis.Map();
+    const useCarto = config.basemap === "carto" && !!cartoKey;
     this.base = new TileLayer({ cacheSize: 64, source: new XYZ({
-      url: config.basemap === "carto" && cartoKey ? `https://a.basemaps.cartocdn.com/${dark ? "dark_all" : "light_all"}/{z}/{x}/{y}.png?api_key=${encodeURIComponent(cartoKey)}` : "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-      crossOrigin: "anonymous", referrerPolicy: "no-referrer", maxZoom: 19, transition: 0, wrapX: false,
+      url: useCarto ? `https://a.basemaps.cartocdn.com/${dark ? "dark_all" : "light_all"}/{z}/{x}/{y}.png?api_key=${encodeURIComponent(cartoKey)}` : "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      // OSM requires a genuine Referer even under HA's no-referrer headers.
+      // Send only the HA origin, never its dashboard path, query or fragment.
+      crossOrigin: "anonymous", referrerPolicy: useCarto ? "no-referrer" : "strict-origin-when-cross-origin", maxZoom: 19, transition: 0, wrapX: false,
     }) });
     this._watch(this.base.getSource(), "basemap");
     const layers = [this.base];

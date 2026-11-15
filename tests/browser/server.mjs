@@ -35,6 +35,8 @@ function tile(z, x, y, base = false) {
   return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk("IHDR", header), chunk("IDAT", deflateSync(data)), chunk("IEND", Buffer.alloc(0))]);
 }
 const server = http.createServer(async (req, res) => {
+  // Match HA's global policy; providers may require a narrower image override.
+  res.setHeader("Referrer-Policy", "no-referrer");
   const url = new URL(req.url, "http://127.0.0.1");
   const match = url.pathname.match(/^\/api\/openmap\/traffic\/\w+\/(\d+)\/(\d+)\/(\d+)\.png$/);
   if (match) { res.setHeader("Content-Type", "image/png"); res.setHeader("X-OpenMap-Fetched-At", "1794651600"); res.end(tile(...match.slice(1).map(Number))); return; }
