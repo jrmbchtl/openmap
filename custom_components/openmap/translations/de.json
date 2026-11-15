@@ -1,0 +1,25 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Open Map",
+        "description": "Entitäten, Ludwigsburger Verkehrsebenen oder beides auswählen. Nichts wird automatisch ausgewählt. Die Karte kann zunächst leer bleiben.",
+        "data": { "title": "Titel", "entities": "Einzelne Entitäten", "overlay_layers": "Verkehrsebenen (anfangs ausgeblendet)", "include_domains": "Ganze Domänen einbeziehen", "geo_location_sources": "Geo-Location-Quellen (kommagetrennt)" }
+      }
+    },
+    "abort": { "already_configured": "Es ist nur eine Open-Map-Konfiguration erlaubt." }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Open Map konfigurieren",
+        "description": "Inhalte und Darstellung auswählen. Ein unverändertes Passwortfeld behält den Schlüssel. Zum Entfernen „CARTO-Schlüssel löschen“ verwenden. „Automatische Mitte“ entfernt einen gespeicherten Mittelpunkt. Verkehrssichtbarkeit wird je Browser gespeichert.",
+        "data": {
+          "title": "Titel", "entities": "Einzelne Entitäten", "overlay_layers": "Verkehrsebenen (neue Ebenen anfangs ausgeblendet)", "include_domains": "Ganze Domänen einbeziehen", "geo_location_sources": "Geo-Location-Quellen (kommagetrennt)",
+          "default_zoom": "Standardzoom", "theme_mode": "Design", "basemap": "Basiskarte", "cluster": "Nahe Markierungen gruppieren", "center_lat": "Breitengrad der Mitte", "center_lon": "Längengrad der Mitte", "clear_center": "Automatische Mitte verwenden", "attribution": "Zusätzlicher Quellenhinweis", "carto_api_key": "CARTO-Schlüssel", "clear_carto_key": "CARTO-Schlüssel löschen", "marker_color_default": "Markierungsfarbe (Name oder #RRGGBB)", "marker_popup_title": "Titelvorlage", "marker_popup_body": "Textvorlage"
+        }
+      }
+    },
+    "error": { "invalid_center": "Breiten- und Längengrad zusammen angeben oder automatische Mitte verwenden.", "invalid_theme": "auto, light oder dark auswählen.", "invalid_basemap": "osm oder carto auswählen." }
+  }
+}

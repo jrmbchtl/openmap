@@ -1,0 +1,46 @@
+const en = {
+  entities: "Entities", traffic: "Traffic layers", search: "Search entities", close: "Close inspector", back: "Back to entities",
+  zoomIn: "Zoom in", zoomOut: "Zoom out", fit: "Show all entities", focusTraffic: "Show Ludwigsburg",
+  loading: "Loading map…", retry: "Retry", mapError: "Map could not load. Retry to reconnect.", fetched: "Tiles retrieved:", notFetched: "not yet retrieved",
+  baseError: "Basemap unavailable. Check your connection and retry.", trafficError: "Some traffic tiles could not load. Retry shortly.",
+  empty: "Choose what goes on your map", emptyBody: "Select entities, traffic layers, or both. No locations are selected automatically.",
+  configure: "Configure map", dashboardHelp: "In dashboard edit mode, open this card’s editor to choose content.",
+  noEntities: "No entities selected. Choose them in the map configuration.", noTraffic: "No traffic layers selected. Choose them in the map configuration.",
+  noMatches: "No matching entities. Try a different name.", noLocation: "Location unavailable", unavailable: "Entity unavailable",
+  missing: "Entity not found", show: "Show on map", details: "More details", state: "State", updated: "Updated", accuracy: "GPS accuracy",
+  battery: "Battery", zoneRadius: "Zone radius", remembered: "Visibility is remembered in this browser for this map.",
+  provider: "Official traffic layers · Stadt Ludwigsburg", area: "Traffic coverage is limited to Ludwigsburg.",
+  noKey: "CARTO key unavailable. Showing OpenStreetMap instead. Configure a restricted CARTO key in the integration settings.",
+  title: "Title", content: "Map content", appearance: "Map appearance", sources: "Geo-location sources", domains: "Include domains",
+  defaults: "Traffic layers (initially hidden)", selected: "Select individual entities or explicitly include entire domains.",
+  advanced: "Per-entity names/colors, traffic opacity/initial visibility and text templates remain editable in YAML.",
+  basemap: "Basemap", theme: "Theme", cluster: "Group nearby entities", zoom: "Default zoom", mapId: "Map ID (optional)",
+  centerLat: "Center latitude (optional)", centerLon: "Center longitude (optional)", clearCenter: "Use automatic center",
+  iconHelp: "Icon mode uses an unlabeled location marker. Entity icons are available in the inspector.",
+  count: "{mapped} of {total} located", limit: "Only the first 500 selected entities are shown. Narrow your selection.",
+};
+const de = {
+  entities: "Entitäten", traffic: "Verkehrsebenen", search: "Entitäten suchen", close: "Detailansicht schließen", back: "Zurück zu Entitäten",
+  zoomIn: "Vergrößern", zoomOut: "Verkleinern", fit: "Alle Entitäten zeigen", focusTraffic: "Ludwigsburg zeigen",
+  loading: "Karte wird geladen…", retry: "Erneut versuchen", mapError: "Karte konnte nicht geladen werden. Bitte erneut versuchen.", fetched: "Kacheln abgerufen:", notFetched: "noch nicht abgerufen",
+  baseError: "Basiskarte nicht verfügbar. Verbindung prüfen und erneut versuchen.", trafficError: "Einige Verkehrskacheln fehlen. Bitte gleich erneut versuchen.",
+  empty: "Inhalte für deine Karte auswählen", emptyBody: "Entitäten, Verkehrsebenen oder beides auswählen. Es werden keine Standorte automatisch ausgewählt.",
+  configure: "Karte konfigurieren", dashboardHelp: "Im Bearbeitungsmodus des Dashboards den Karteneditor öffnen und Inhalte auswählen.",
+  noEntities: "Keine Entitäten ausgewählt. In der Kartenkonfiguration auswählen.", noTraffic: "Keine Verkehrsebenen ausgewählt. In der Kartenkonfiguration auswählen.",
+  noMatches: "Keine passenden Entitäten. Einen anderen Namen suchen.", noLocation: "Standort nicht verfügbar", unavailable: "Entität nicht verfügbar",
+  missing: "Entität nicht gefunden", show: "Auf Karte zeigen", details: "Weitere Details", state: "Zustand", updated: "Aktualisiert", accuracy: "GPS-Genauigkeit",
+  battery: "Akku", zoneRadius: "Zonenradius", remembered: "Sichtbarkeit wird in diesem Browser für diese Karte gespeichert.",
+  provider: "Offizielle Verkehrsebenen · Stadt Ludwigsburg", area: "Verkehrsdaten sind auf Ludwigsburg begrenzt.",
+  noKey: "CARTO-Schlüssel fehlt. Stattdessen wird OpenStreetMap angezeigt. Einen eingeschränkten CARTO-Schlüssel in den Integrationseinstellungen hinterlegen.",
+  title: "Titel", content: "Karteninhalte", appearance: "Kartendarstellung", sources: "Geo-Location-Quellen", domains: "Domänen einbeziehen",
+  defaults: "Verkehrsebenen (anfangs ausgeblendet)", selected: "Einzelne Entitäten auswählen oder ausdrücklich ganze Domänen einbeziehen.",
+  advanced: "Namen/Farben je Entität, Deckkraft/Anfangssichtbarkeit der Verkehrsebenen und Textvorlagen sind weiterhin in YAML bearbeitbar.",
+  basemap: "Basiskarte", theme: "Design", cluster: "Nahe Entitäten gruppieren", zoom: "Standardzoom", mapId: "Karten-ID (optional)",
+  centerLat: "Breitengrad (optional)", centerLon: "Längengrad (optional)", clearCenter: "Automatische Mitte verwenden",
+  iconHelp: "Symbolmodus zeigt eine Standortmarkierung ohne Text. Entitätssymbole erscheinen in der Detailansicht.",
+  count: "{mapped} von {total} mit Standort", limit: "Nur die ersten 500 ausgewählten Entitäten werden gezeigt. Auswahl einschränken.",
+};
+export function localize(language, key, values = {}) {
+  const text = (String(language).startsWith("de") ? de : en)[key] || en[key] || key;
+  return text.replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? ""));
+}

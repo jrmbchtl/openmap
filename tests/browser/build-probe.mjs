@@ -1,0 +1,11 @@
+import { rollup } from "rollup";
+import { nodeResolve } from "@rollup/plugin-node-resolve";
+import commonjs from "@rollup/plugin-commonjs";
+import { mkdir } from "node:fs/promises";
+await mkdir("/tmp/opencode", { recursive:true });
+const bundle = await rollup({ input:"tests/browser/probe.js",plugins:[nodeResolve(),commonjs()] });
+await bundle.write({ file:"/tmp/opencode/openmap-probe.js",format:"es" });
+await bundle.close();
+const iconBundle = await rollup({ input:"tests/browser/icons.js",plugins:[nodeResolve()] });
+await iconBundle.write({ file:"/tmp/opencode/openmap-icons.js",format:"es" });
+await iconBundle.close();

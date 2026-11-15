@@ -1,0 +1,5 @@
+[
+  {"input":{},"expected":{"entities":[],"overlay_layers":[],"center":null,"default_zoom":14,"theme_mode":"auto","basemap":"osm"}},
+  {"input":{"dark_mode":"dark","geolocation_sources":"gps, custom","center_lat":0,"center_lon":0},"expected":{"theme_mode":"dark","geo_location_sources":["gps","custom"],"center":[0,0]}},
+  {"input":{"geo_location_sources":[],"geolocation_sources":["old"],"overlay_layers":[{"preset":"bus","name":"Custom bus","visible":true,"opacity":0.4}]},"expected":{"geo_location_sources":[],"overlay_layers":[{"preset":"bus","name":"Custom bus","visible":true,"opacity":0.4}]}}
+]

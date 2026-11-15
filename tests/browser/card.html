@@ -1,0 +1,23 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Open Map browser fixture</title>
+<style>
+html,body{margin:0;width:100%;height:100%;font:14px Roboto,Arial,sans-serif;--primary-color:#1976d2;--primary-text-color:#212121;--secondary-text-color:#555;--card-background-color:#fff;--secondary-background-color:#edf1f4;--divider-color:#ddd;--text-primary-color:#fff}
+body.dark{--primary-color:#90caf9;--primary-text-color:#eee;--secondary-text-color:#bbb;--card-background-color:#1c1c1c;--secondary-background-color:#303030;--divider-color:#555;--text-primary-color:#111}
+.fixture-label{height:24px;box-sizing:border-box;padding:4px 12px;background:#e6edf5;color:#26364a;font-size:11px}openmap-card:not(.panel-mode){height:calc(100% - 24px)}
+</style></head><body><div class="fixture-label">Synthetic test data · Home Assistant host stubs · not live provider evidence</div>
+<script type="module">
+// HA owns these elements in production. Isolated browser fixtures stub only hosts.
+const {icons}=await import('/fixture-icons.js');
+customElements.define('ha-icon',class extends HTMLElement{set icon(value){this.setAttribute('data-icon',value);this.innerHTML='<svg aria-hidden="true" viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="'+(icons[value]||icons['mdi:map-marker'])+'"/></svg>'}});
+customElements.define('ha-form',class extends HTMLElement{set data(value){this._data=value}set schema(value){this._schema=value}get data(){return this._data}get schema(){return this._schema}});
+await import('/custom_components/openmap/frontend/dist/openmap-card.js');
+const state=(id,name,lat,lon,extra={})=>({entity_id:id,state:'home',last_updated:'2026-11-14T12:00:00Z',attributes:{friendly_name:name,latitude:lat,longitude:lon,...extra}});
+window.fixtureHass={language:'en',user:{id:'fixture-user'},themes:{darkMode:false},
+states:{'person.alex':state('person.alex','Alex',48.892,9.192,{gps_accuracy:30,battery_level:82}),
+'person.sam':state('person.sam','Sam',48.90,9.21),
+'zone.home':state('zone.home','Home',48.885,9.17,{radius:200}),
+'person.offline':{entity_id:'person.offline',state:'unavailable',attributes:{friendly_name:'Phone offline'},last_updated:'2026-11-14T12:00:00Z'}},
+fetchWithAuth:(url,options={})=>fetch(url,{...options,headers:{Authorization:'Bearer fixture-only',...options.headers}})};
+const card=document.createElement('openmap-card');
+card.setConfig({title:'Household & traffic',map_id:'fixture-map',entities:['person.alex','person.sam','zone.home','person.offline'],overlay_layers:[{preset:'bus',name:'Bus lines & stops',visible:true},{preset:'parken',name:'Parking zones',visible:false}],center:[48.892,9.192],default_zoom:14});
+card.hass=window.fixtureHass;document.body.append(card);window.card=card;
+</script></body></html>
