@@ -33,6 +33,8 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      # Validate committed files before a build can recreate omitted chunks.
+      - run: npm run check:package
       - run: npm run lint
       - run: npm test
       - run: npm run build

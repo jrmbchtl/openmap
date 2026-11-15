@@ -8,6 +8,7 @@
     "build": "rollup -c rollup.config.mjs",
     "watch": "rollup -c rollup.config.mjs --watch",
     "lint": "eslint custom_components/openmap/frontend/src/",
+    "check:package": "node scripts/check-frontend-package.mjs",
     "test": "node --test tests/frontend/*.test.js",
     "test:browser": "npm run build && node tests/browser/build-probe.mjs && playwright test"
   },

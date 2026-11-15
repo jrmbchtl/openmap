@@ -183,6 +183,21 @@ desktop/emulated-Android regressions. Dependency audit has two known **low,
 build-only** findings in `deepmerge` / node-resolve; no production advisory remains.
 Do not force-downgrade the resolver to an incompatible release to silence them.
 
+Before committing a frontend update, stage the entire generated distribution,
+not just changes to files Git already tracks:
+
+```bash
+git add -A -- custom_components/openmap/frontend/dist/
+npm run check:package -- --staged
+```
+
+`npm run check:package` checks the **committed HEAD**, not local files. Use
+`npm run check:package -- --ref <release-tag>` to check a release candidate.
+The check follows actual ESM imports and rejects missing modules/notices; an
+untracked file cannot satisfy it. CI runs it **before rebuilding** so a build
+cannot hide an incomplete download package. Publish only a checked commit/tag;
+tests passing in a working directory do not prove that all new chunks were committed.
+
 **Verification boundaries:** no live HA instance or physical Android device was
 available for this overhaul. Real geoportal fetching timed out in this environment.
 Actual Companion WebView/TalkBack behavior, physical-device performance and
